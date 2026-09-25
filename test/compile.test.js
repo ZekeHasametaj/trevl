@@ -121,7 +121,8 @@ test('typed Banja Luka airport answers resolve locally without a provider', asyn
   for (const name of ['banja luka', 'Flughafen Banja Luka', 'Banja Luka Flughafen', 'Banja Luka Airport', 'Airport Banja Luka', 'Banja-Luka', 'Banja  Luka', 'BNX', 'bnx']) {
     const result = await findPlace(name, duffel);
     assert.equal(result?.place.iata, 'BNX', name);
-    assert.equal(result.place.source, 'list', name);
+    assert.equal(result.place.source, 'ourairports', name);
+    assert.equal(result.place.name, 'Banja Luka', name);
   }
   assert.equal(providerCalls, 0);
 });
@@ -131,7 +132,7 @@ test('unknown towns are found through the airport search (stubbed), never words 
   const asked = [];
   const duffel = { placeSuggestions: async (q) => { asked.push(q); return q === 'Ohrid' ? [{ type: 'airport', name: 'Ohrid St. Paul the Apostle Airport', iata_code: 'OHD', city_name: 'Ohrid', country: 'MK', airports: [] }] : []; } };
   assert.deepEqual(placeCandidates('Ohrid vom 2 bis 18 Oktober, Hotel stornierbar, max 900 CHF'), ['Ohrid']);
-  const r = await findPlace('Ohrid vom 2 bis 18 Oktober, Hotel stornierbar', duffel);
+  const r = await findPlace('Ohrid vom 2 bis 18 Oktober, Hotel stornierbar', duffel, { catalogLookup: () => [] });
   assert.equal(r.place.iata, 'OHD');
   assert.equal(r.place.name, 'Ohrid');
   assert.ok(!asked.includes('Hotel') && !asked.includes('Oktober'));
@@ -145,9 +146,9 @@ test('same name in two countries → ask; a country in the text decides', async 
     { type: 'airport', name: 'Kōchi Airport', iata_code: 'KCZ', city_name: 'Kochi', country: 'JP', lat: 33.5, lng: 133.7 },
     { type: 'airport', name: 'Cochin International Airport', iata_code: 'COK', city_name: 'Kochi', country: 'IN', lat: 10.15, lng: 76.4 },
     { type: 'airport', name: 'Kuching International Airport', iata_code: 'KCH', city_name: 'Kuching', country: 'MY', lat: 1.5, lng: 110.3 }] : []) };
-  const ask = await findPlace('Kochi vom 2. bis 20. Oktober', duffel);
+  const ask = await findPlace('Kochi vom 2. bis 20. Oktober', duffel, { catalogLookup: () => [] });
   assert.deepEqual(ask.choices.map(p => p.iata), ['KCZ', 'COK']);
-  const india = await findPlace('Kochi in Indien vom 2. bis 20. Oktober', duffel);
+  const india = await findPlace('Kochi in Indien vom 2. bis 20. Oktober', duffel, { catalogLookup: () => [] });
   assert.equal(india.place.iata, 'COK');
 });
 
@@ -214,7 +215,7 @@ test('airport search matches whole words only, never a prefix (Bali ≠ Balikpap
     { type: 'airport', name: 'Lombokstadt Regional', iata_code: 'XLB', city_name: 'Lombokstadt', country: 'ID' },
     { type: 'airport', name: 'Lombok International Airport', iata_code: 'LOP', city_name: 'Praya', country: 'ID' },
   ] };
-  const r = await findPlace('Lombok vom 3. bis 10. Oktober', duffel);
+  const r = await findPlace('Lombok vom 3. bis 10. Oktober', duffel, { catalogLookup: () => [] });
   assert.equal(r.place.name, 'Lombok');
   assert.equal(r.place.iata, 'LOP');
   assert.equal(r.place.is_region, true);

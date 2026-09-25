@@ -19,6 +19,7 @@ const FACT_LABEL = {
   'authorization.billing_amount_chf': 'Betrag', 'authorization.order_cancellable': 'Kostenlos stornierbar',
   'authorization.order_returnable': 'Rückgabe möglich', 'authorization.timestamp': 'Buchungszeitpunkt',
   'travel.destination_city': 'Reiseziel', 'travel.origin_city': 'Abflugort', 'travel.start_date': 'Beginn',
+  'travel.destination_iata': 'Zielflughafen', 'travel.origin_iata': 'Abflughafen',
   'travel.end_date': 'Ende', 'travel.travelers': 'Reisende', 'travel.stops': 'Umstiege', 'travel.cabin_class': 'Klasse',
   'travel.checked_bags': 'Aufgabegepäck pro Person', 'travel.stars': 'Hotel-Sterne', 'travel.price_per_night_chf': 'Preis pro Nacht',
   'merchant.trust_level': 'Anbieter', 'travel.kind': 'Buchungsart', 'items.item_category': 'Positionen',
@@ -28,6 +29,7 @@ const TRUST_LABEL = { verified: 'geprüft', known: 'schon genutzt', unknown: 'un
 const REASON_BY_KIND = {
   budget_total: ['trip_budget_exceeded', 'budget_reserved'], budget_purchase: ['per_booking_limit', 'amount_unknown'],
   per_night: ['hotel_price_per_night', 'amount_unknown'], destination: ['wrong_destination', 'destination_unknown'],
+  airport_destination: ['wrong_destination_airport', 'destination_airport_unknown'], airport_origin: ['wrong_origin_airport', 'origin_airport_unknown'],
   dates_start: ['dates_outside_window', 'dates_unknown'], dates_end: ['dates_outside_window', 'dates_unknown'],
   travelers: ['travelers_mismatch', 'travelers_unknown'], cancellable: ['not_cancellable', 'cancellation_unknown'],
   no_extras: ['addon_not_allowed', 'items_unknown'], categories: ['category_not_allowed', 'category_unknown'],
@@ -42,6 +44,7 @@ export const AGENT_HINT = {
   prompt_injection: 'Diesen Anbieter meiden.', merchant_not_trusted: 'Nur geprüfte Anbieter nutzen.', merchant_unverified: 'Geprüfte Anbieter bevorzugen.',
   trip_budget_exceeded: 'Günstigeres Angebot suchen.', per_booking_limit: 'Günstigeres Angebot suchen.', hotel_price_per_night: 'Günstigeres Hotel suchen.',
   duplicate_booking: 'Nicht erneut buchen.', wrong_destination: 'Ziel einhalten.', dates_outside_window: 'Reisedaten einhalten.',
+  wrong_destination_airport: 'Den bestätigten Zielflughafen einhalten.', wrong_origin_airport: 'Den bestätigten Abflughafen einhalten.',
   travelers_mismatch: 'Anzahl Reisende einhalten.', not_direct: 'Nur Direktflüge.', baggage_missing: 'Tarif mit Aufgabegepäck wählen.',
   mandate_revoked: 'Sofort aufhören.', mandate_paused: 'Warten, bis der Kunde fortsetzt.',
 };
@@ -88,6 +91,7 @@ export function buildFacts(a) {
     'travel.destination_city': t.destination_city ?? null,
     'travel.destination_iata': t.destination_iata ?? null,
     'travel.origin_city': t.origin_city ?? null,
+    'travel.origin_iata': t.origin_iata ?? null,
     'travel.start_date': t.start_date ?? null,
     'travel.end_date': t.end_date ?? null,
     'travel.travelers': t.travelers ?? null,

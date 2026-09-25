@@ -4,6 +4,7 @@
 // and every number or quote it returns must appear in the customer's original text.
 import { fold, fmtMoney, fmtDate } from '../leash/util.js';
 import { findPlaces, resolvePlace, byCity, PLACES } from './places.js';
+import { placeQuery } from './geo.js';
 
 const MONTHS = [
   ['januar', 'jan', 'january'], ['februar', 'feb', 'february'], ['märz', 'maerz', 'mrz', 'march', 'mar'], ['april', 'apr'],
@@ -146,10 +147,11 @@ export function parseIntent(text, today = new Date()) {
 
   // Places: "ab/von X" is the origin, the first other place is the destination.
   const places = findPlaces(t);
-  const originM = t.match(/\b(ab|von|from|departing)\s+([A-Za-zÀ-ÿ ]{3,20})/i);
-  const originPlace = originM ? resolvePlace(originM[2].trim().split(/\s+/).slice(0, 2).join(' ')) ?? resolvePlace(originM[2].trim().split(/\s+/)[0]) : null;
-  if (originPlace) { intent.origin = originPlace.city; intent.origin_quote = originM[0].trim(); }
-  else if (originM && /^\p{Lu}/u.test(originM[2].trim())) { intent.origin_text = originM[2].trim().split(/\s+/)[0]; intent.origin_quote = originM[0].trim(); }
+  const originQuery = placeQuery(t, 'origin');
+  const originPlace = originQuery ? resolvePlace(originQuery) : null;
+  if (originQuery) intent.origin_query = originQuery;
+  if (originPlace) { intent.origin = originPlace.city; intent.origin_quote = originQuery; }
+  else if (originQuery) { intent.origin_text = originQuery; intent.origin_quote = originQuery; }
   // A Swiss home airport named without "ab" is the origin, never the destination ("Zürich nach Ohrid").
   const home = places.find(p => p.place.home);
   if (!intent.origin && !intent.origin_text && home) { intent.origin = home.place.city; intent.origin_quote = home.alias; }
@@ -267,7 +269,7 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
   // Apply answers to open questions.
   // A chip answer names a built-in city; a typed answer was resolved by the server into destination_place.
   if (a.destination && byCity(a.destination)) { I.destination = a.destination; I.destination_place = null; I.destination_quote = null; }
-  if (a.origin && byCity(a.origin)) { I.origin = a.origin; I.origin_place = null; }
+  if (a.origin && byCity(a.origin)) { I.origin = a.origin; I.origin_place = null; I.origin_text = null; I.origin_not_found = null; I.origin_choices = null; }
   if (a.dates) { const [s, e] = String(a.dates).split('|'); I.start_date = s; I.end_date = e; I.dates_answered = true; }
   if (a.travelers) I.travelers = Number(a.travelers);
   if (a.budget) I.budget_total = { amount: Number(a.budget), currency: 'CHF', quote: null, answered: true };
@@ -276,7 +278,7 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
   if (a.cancellable === 'yes') I.cancellable = { quote: null, scope: 'hotel', answered: true };
 
   const dest = I.destination_place ?? byCity(I.destination);
-  const origin = I.origin_place ?? byCity(I.origin) ?? byCity('zurich');
+  const origin = I.origin_place ?? byCity(I.origin) ?? (I.origin_text || I.origin_not_found || I.origin_choices?.length ? null : byCity('zurich'));
   const where = (p) => { const cn = p.country_name ?? regionName(p.country); return cn && p.country !== 'CH' ? `${p.name} (${cn})` : p.name; };
   const travelers = I.travelers ?? 1;
 
@@ -294,15 +296,21 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
     // Same name, different places (Kochi in India and Kōchi in Japan): ask instead of guessing.
     const name = I.destination_choices[0].name;
     questions.push({ id: 'destination', required: true, input: 'Oder anderes Ziel eingeben', text: `Welches ${name} meinst du?`,
-      options: I.destination_choices.map(p => ({ value: `iata:${p.iata}`, label: `${p.name} · ${p.country_name ?? p.country} (${p.iata})` })), why: 'Den Namen gibt es mehrmals. trevl rät nicht.' });
+      options: I.destination_choices.map(p => ({ value: `iata:${p.iata}`, label: `${p.airport_name ?? p.name} · ${p.country_name ?? p.country} (${p.iata})` })), why: 'Mehrere Orte oder Flughäfen passen. trevl rät nicht.' });
   } else if (!dest) {
     const suggested = (I.destination_alternatives ?? []).map(p => ({ value: `iata:${p.iata}`, label: `${p.name} (${p.iata})${p.country_name ? ` · ${p.country_name}` : ''}` }));
     questions.push({ id: 'destination', required: true, input: 'Stadt oder Flughafen eingeben', text: I.destination_not_found ? `«${I.destination_not_found}» kenne ich nicht. Wohin soll es gehen?` : 'Wohin soll es gehen?',
       options: suggested.length ? suggested : ['lisbon', 'barcelona', 'rome', 'paris'].map(c => ({ value: c, label: byCity(c).name })), why: 'Das Ziel begrenzt, was der Agent buchen darf.' });
   }
+  if (!origin) {
+    questions.push({ id: 'origin', required: true, input: 'Abflugort oder Flughafen eingeben',
+      text: I.origin_choices?.length ? 'Welchen Abflughafen meinst du?' : `Abflugort «${I.origin_not_found ?? I.origin_text ?? ''}» nicht eindeutig gefunden. Wo möchtest du starten?`,
+      options: I.origin_choices?.length ? I.origin_choices.map(p => ({ value: `iata:${p.iata}`, label: `${p.airport_name ?? p.name} · ${p.country_name ?? p.country} (${p.iata})` })) : [],
+      why: 'Einen angegebenen Abflugort ersetzt trevl nicht durch einen anderen Flughafen.' });
+  }
   // "Bali Thailand": the text names a country the destination is not in. Plan the named place, but say so openly.
   if (dest?.country) {
-    const named = mentionedCountries(text).filter(c => c.cc !== 'CH' && c.cc !== origin.country);
+    const named = mentionedCountries(text).filter(c => c.cc !== 'CH' && c.cc !== origin?.country);
     if (named.length && !named.some(c => c.cc === dest.country)) {
       const cn = dest.country_name ?? regionName(dest.country);
       notes.push(`Du schreibst «${named[0].quote}», aber ${dest.name} liegt ${IN_COUNTRY[dest.country] ?? `in ${cn}`}. trevl plant ${where(dest)} – passe den Text an, falls du ein anderes Ziel meinst.`);
@@ -357,7 +365,13 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
   if (I.per_night) rules.push({ id: 'per_night', kind: 'per_night', label: `Hotel höchstens ${fmtMoney(I.per_night.amount, I.per_night.currency).replace('.00', '')} pro Nacht`, field: 'travel.price_per_night_chf', operator: '<=', value: I.per_night.amount, currency: I.per_night.currency, applies_to: ['hotel'], source: src(I.per_night.quote) });
   // All names and airport codes of the destination count as the same place (Pristina = Prishtina = PRN).
   if (dest) rules.push({ id: 'destination', kind: 'destination', label: `Nur ${where(dest)}${dest.airport ? `, Flughafen ${dest.airport.iata}` : ''}`, field: 'travel.destination_city', operator: 'in',
-    value: [...new Set([dest.city, dest.name, dest.en, dest.iata, dest.city_iata, ...(dest.aliases ?? [])].filter(Boolean).map(String))], source: src(I.destination_quote) });
+    value: [...new Set([dest.city, dest.name, dest.en, dest.iata, dest.city_iata, ...(dest.aliases ?? [])].filter(Boolean).map(String))], source: I.destination_answered ? { type: 'answer', quote: null } : src(I.destination_quote) });
+  // City aliases remain useful for hotels. Flights must also match the actual
+  // airport confirmed in the route; London Gatwick does not permit Heathrow.
+  if (dest?.iata) rules.push({ id: 'airport_destination', kind: 'airport_destination', label: `Zielflughafen ${dest.airport_name ?? dest.name} (${dest.iata})`,
+    field: 'travel.destination_iata', operator: 'in', value: [dest.iata], applies_to: ['flight'], source: I.destination_answered ? { type: 'answer', quote: null } : src(I.destination_quote) });
+  if (origin?.iata) rules.push({ id: 'airport_origin', kind: 'airport_origin', label: `Abflughafen ${origin.airport_name ?? origin.name} (${origin.iata})`,
+    field: 'travel.origin_iata', operator: 'in', value: [origin.iata], applies_to: ['flight'], source: I.origin_answered ? { type: 'answer', quote: null } : src(I.origin_quote) });
   if (start && end) {
     rules.push({ id: 'dates_start', kind: 'dates_start', label: `Nicht vor ${fmtDate(start)}`, field: 'travel.start_date', operator: '>=', value: start, source: src(I.dates_quote) });
     rules.push({ id: 'dates_end', kind: 'dates_end', label: `Nicht nach ${fmtDate(end)}`, field: 'travel.end_date', operator: '<=', value: end, source: src(I.dates_quote) });
@@ -379,7 +393,7 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
   rules.push({ id: 'merchant_trust', kind: 'merchant_trust', label: 'Nur geprüfte oder bekannte Anbieter', field: 'merchant.trust_level', operator: 'in', value: ['verified', 'known'], source: { type: 'default', quote: null } });
 
   guidance.push('Die Reisekasse zählt nur, was wirklich gebucht ist. Was auf deine Antwort wartet, ist reserviert.');
-  guidance.push(`Abflug ab ${origin.name} (${origin.iata}).`);
+  if (origin) guidance.push(`Abflug ab ${origin.name} (${origin.iata}).`);
   if (dest?.airport) {
     guidance.push(`${dest.name} hat keinen eigenen Flughafen: Flug nach ${dest.airport.city} (${dest.airport.iata}, ca. ${dest.airport.distance_km} km Luftlinie), dann Transfer ins Hotel.`);
     if (I.no_transfer || (I.only && !I.only.value.includes('transfer'))) notes.push(`Ohne Transfer musst du selbst von ${dest.airport.city} nach ${dest.name} kommen (ca. ${dest.airport.distance_km} km).`);
@@ -397,8 +411,8 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
 
   const trip = {
     destination: dest ? { city: dest.city, name: dest.name, en: dest.en, iata: dest.iata, country: dest.country, country_name: dest.country_name ?? regionName(dest.country), source: dest.source ?? 'list',
-      lat: dest.lat ?? null, lng: dest.lng ?? null, airport: dest.airport ?? null, is_region: !!dest.is_region } : null,
-    origin: { city: origin.city, name: origin.name, en: origin.en, iata: origin.iata },
+      lat: dest.lat ?? null, lng: dest.lng ?? null, airport: dest.airport ?? null, airport_name: dest.airport_name ?? null, is_region: !!dest.is_region } : null,
+    origin: origin ? { city: origin.city, name: origin.name, en: origin.en, iata: origin.iata, airport_name: origin.airport_name ?? null } : null,
     start_date: start ?? null, end_date: end ?? null, travelers,
     cabin: I.cabin?.value ?? 'economy', direct: !!I.direct, bags: !!I.baggage, kinds,
   };

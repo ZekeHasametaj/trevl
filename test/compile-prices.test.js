@@ -101,7 +101,7 @@ test('nightly plus whole-stay hotel limits and repeated flight caps are all pres
   const d = compile('Budget 900 CHF, Hotel 150 CHF pro Nacht, Hotel insgesamt 250 CHF, Flug 200 CHF, Flug maximal 180 CHF');
   assert.equal(rule(d, 'per_night').value, 150);
   assert.equal(rule(d, 'budget_hotel').value, 250);
-  assert.deepEqual(d.hard_rules.filter(r => r.applies_to?.includes('flight')).map(r => r.value), [200, 180]);
+  assert.deepEqual(d.hard_rules.filter(r => r.kind === 'budget_purchase' && r.applies_to?.includes('flight')).map(r => r.value), [200, 180]);
   assert.equal(new Set(d.hard_rules.map(r => r.id)).size, d.hard_rules.length);
 });
 

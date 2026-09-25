@@ -236,7 +236,7 @@ function vDraft() {
     <div class="card review-rules">${d.hard_rules.map(ruleRow).join('')}</div>
     <div class="trip-card">
       <div class="deco">${I.plane(120)}</div>
-      <div class="eyebrow">${esc(t.origin?.name ?? 'Zürich')} → </div>
+      <div class="eyebrow">${esc(t.origin?.name ?? 'Abflugort offen')} → </div>
       <div class="dest">${esc(t.destination?.name ?? 'Ziel offen')}</div>
       <div class="meta">${t.destination?.airport ? `<span>${esc(t.destination.country_name ?? '')} · ✈ ${esc(t.destination.airport.iata)}, ${t.destination.airport.distance_km} km</span>` : t.destination?.iata ? `<span>${esc(t.destination.iata)}${t.destination.country_name ? ` · ${esc(t.destination.country_name)}` : ''}</span>` : ''}<span>${t.start_date ? range(t.start_date, t.end_date) : 'Daten offen'}</span><span>${t.travelers} ${t.travelers === 1 ? 'Person' : 'Personen'}</span><span>${(t.kinds ?? []).map(k => KIND_LABEL[k]).join(' · ')}</span></div>
     </div>

@@ -48,7 +48,7 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
         amount: f.amount, currency: f.total_currency, order_cancellable: f.refundable, order_returnable: 'not_applicable',
         purchase_description: `Flug ${f.origin.iata}–${f.destination.iata} retour`,
         items: [{ line_no: 1, item_id: f.id, item_name: `Flug ${f.origin.iata}–${f.destination.iata} retour, ${f.travelers} ${f.travelers === 1 ? 'Person' : 'Personen'}${f.checked_bags ? ', mit Gepäck' : ', ohne Aufgabegepäck'}`, item_category: 'flight_fare', quantity: 1, unit_price: f.amount, currency: f.total_currency, item_details: `${f.flight_numbers.join(' / ')} · ${f.cabin ?? ''}` }],
-        travel: { kind: 'flight', title, origin_city: f.origin.city ?? trip.origin?.en, destination_city: f.destination.city ?? trip.destination?.en, destination_iata: f.destination.iata ?? null,
+        travel: { kind: 'flight', title, origin_city: f.origin.city ?? trip.origin?.en, origin_iata: f.origin.iata ?? null, destination_city: f.destination.city ?? trip.destination?.en, destination_iata: f.destination.iata ?? null,
           start_date: f.depart_at?.slice(0, 10), end_date: (f.return_at ?? f.depart_at)?.slice(0, 10), travelers: f.travelers, stops: f.stops,
           cabin_class: f.cabin, checked_bags: f.checked_bags, provider: f.demo ? 'demo' : 'duffel', offer_id: f.id },
       };

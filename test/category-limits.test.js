@@ -9,7 +9,8 @@ const nightly = (value) => ({ id: 'night', kind: 'per_night', label: 'Hotel pro 
 const auth = (kind, amount) => ({
   authorization_id: 'AZ-CATEGORY', amount, currency: 'CHF', timestamp: '2026-09-25T10:00:00Z',
   merchant: { merchant_id: 'ME-STAYFINDER', merchant_name: 'Stayfinder', domain: 'stayfinder.ch' },
-  travel: { kind, destination_city: 'Paris', start_date: '2026-10-16', end_date: '2026-10-18', travelers: 2 },
+  travel: { kind, destination_city: 'Paris', ...(kind === 'flight' ? { origin_city: 'Zurich', origin_iata: 'ZRH', destination_iata: 'CDG' } : {}),
+    start_date: '2026-10-16', end_date: '2026-10-18', travelers: 2 },
 });
 const mandate = (hard_rules, uncertainty_policy = 'ask') => ({ mandate_id: 'CATEGORY-MANDATE', status: 'active', version: 1, hard_rules, uncertainty_policy });
 const decide = (kind, amount, rules, extra = {}) => evaluate({ auth: auth(kind, amount), mandate: mandate(rules), ...extra });

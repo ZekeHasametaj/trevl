@@ -30,7 +30,7 @@ Dann im Browser: <http://localhost:4320>. Das ist die volle Version: Flüge übe
 |---|---|---|
 | `npm run start:hotels` | <http://localhost:4320> (Leine: 4321) | Duffel-Flüge + **LiteAPI-Hotels** (Sandbox), Daten in `data-hotels/` |
 | `npm start` | <http://localhost:4310> (Leine: 4311) | Duffel-Flüge + Hotels/Transfers aus dem Testmarkt, Daten in `data/` |
-| `npm test` | – | 72 automatische Tests + Prüfung des generierten Jev-Bausteins |
+| `npm test` | – | 136 automatische Tests + Prüfung des generierten Jev-Bausteins |
 | `npm run test:jev:live` | – | begrenzte echte Jev-Prüfung, synthetische Käufe, keine Buchungen |
 | `npm run smoke -- http://localhost:4320` | – | ganze Reise Ende-zu-Ende gegen einen laufenden Server (**setzt diese Instanz zurück**, bucht mit Schlüsseln echte Testbuchungen) |
 | `npm run viseca-replay` | – | Visecas 45 offizielle Testkäufe durch die Engine → `docs/viseca-replay.md` |
@@ -55,6 +55,15 @@ Optionale Schlüssel in `.env` (Vorlage: `.env.example`, wird nie committet):
 Schlüssel bekommst du kostenlos: Duffel unter [app.duffel.com](https://app.duffel.com) (Testmodus, «Access tokens»),
 LiteAPI unter [dashboard.liteapi.travel](https://dashboard.liteapi.travel) (Sandbox-Key `sand_…`), Anthropic unter
 [console.anthropic.com](https://console.anthropic.com).
+
+## Flughäfen weltweit
+
+Die Ortserkennung nutzt ein mitgeliefertes [OurAirports-Verzeichnis](server/app/data/README.md)
+mit 9.054 nicht geschlossenen IATA-Einträgen und 3.857 Namensvarianten (Stand 25.09.2026).
+Sie braucht keinen Duffel-Schlüssel. Flughafenname, Stadt oder Code eingeben; bei mehreren
+Treffern den Flughafen im Regel-Dialog wählen. Abflug und Ziel werden anschliessend als
+konkrete Flugregeln geprüft. Die Erkennung belegt keine verfügbaren Flüge; ohne Duffel-Testzugang
+bleiben die Flugangebote Demo-Daten. Aktualisieren: `node scripts/update-airports.mjs`.
 
 ## Kontext: wie das Projekt entstanden ist
 

@@ -10,8 +10,7 @@ import { createLeashService } from './leash/service.js';
 import { pruefeText } from './leash/vendor/jev-check.js';
 import { ENGINE_VERSION } from './leash/evaluate.js';
 import { parseIntent, buildDraft } from './app/compile.js';
-import { findPlace } from './app/geo.js';
-import { byCity } from './app/places.js';
+import { resolvePlaces } from './app/resolve-places.js';
 import { llmAvailable, anthropicKeyPresent, understandWithModel, mergeIntents } from './app/llm.js';
 import { createDuffel } from './app/duffel.js';
 import { createLiteApi } from './app/liteapi.js';
@@ -113,37 +112,6 @@ async function followLeash() {
   }
   followLeash();
 })();
-
-// Destinations the built-in list does not know are looked up worldwide (Duffel airports).
-async function resolvePlaces(text, intent, answers) {
-  const I = { ...intent };
-  const apply = (found, quote) => {
-    if (found?.choices) Object.assign(I, { destination: null, destination_place: null, destination_choices: found.choices, destination_quote: null });
-    else if (found?.place) Object.assign(I, { destination: null, destination_place: found.place, destination_quote: quote === undefined ? found.quote : quote, destination_alternatives: found.alternatives });
-  };
-  const typed = answers.destination && !byCity(answers.destination) ? String(answers.destination).replace(/^iata:/, '') : null;
-  if (typed) {
-    const found = await findPlace(typed, duffel, { context: text });
-    if (found) apply(found, null); else I.destination_not_found = typed;
-    delete answers.destination;
-  } else if (!I.destination && !answers.destination) {
-    apply(await findPlace(text, duffel, { exclude: [I.origin_text] }));
-  }
-  // Town without airport: the customer may pick another of the nearest airports.
-  const p = I.destination_place;
-  if (p?.airport && answers.airport && answers.airport !== p.airport.iata) {
-    const alt = p.airport_alternatives?.find(a => a.iata === answers.airport);
-    if (alt) {
-      const others = [p.airport, ...p.airport_alternatives].filter(a => a.iata !== alt.iata);
-      I.destination_place = { ...p, iata: alt.iata, airport: alt, airport_alternatives: others, aliases: [...new Set([p.name, alt.iata, alt.city])] };
-    }
-  }
-  if (I.origin_text && !I.origin) {
-    const found = await findPlace(I.origin_text, duffel);
-    if (found) I.origin_place = found.place;
-  }
-  return I;
-}
 
 // 3. Test attacks for the jury ("Regie"). They act like a manipulated agent or shop.
 const modelIntents = new Map();
@@ -271,7 +239,7 @@ const server = http.createServer(async (req, res) => {
         if (m.ok) { intent = mergeIntents(intent, m.intent); Object.assign(meta, { understood_by: 'model', model_ms: m.ms }); }
         else meta.model_note = `Modell nicht genutzt: ${m.reason}`;
       }
-      intent = await resolvePlaces(text, intent, answers);
+      intent = await resolvePlaces(text, intent, answers, duffel);
       return json(res, 200, { ...buildDraft(text, intent, answers, now), ...meta });
     }
     if (p.startsWith('/api/leash/')) {

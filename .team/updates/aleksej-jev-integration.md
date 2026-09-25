@@ -115,3 +115,38 @@ Browserprüfung auf 4330: „Ab Zürich nach banja luka …“ zeigt im Regel-Di
 Nur Entwurf geprüft, keine Regeln aktiviert und keine Buchung ausgelöst.
 Hauptvorschau neu gestartet, bestehende Daten erhalten. Flugangebote bleiben
 synthetisch; Erkennung eines Flughafens belegt keine reale Flugverfügbarkeit.
+
+## Weltweites Flughafenverzeichnis statt Einzelergänzungen
+
+OurAirports ist als lokaler Public-Domain-Snapshot eingebunden: 9.054 nicht
+geschlossene Einträge mit IATA-Code, davon 4.133 mit Linienverkehr, inklusive
+kleiner Flugplätze, Wasserflugplätze und Heliports. Dazu 3.857 begrenzte exakte
+Namensvarianten aus Quell-Keywords, zum Beispiel Izmir → ADB. Quelle, Hash,
+Abrufdatum, Abdeckung und Updatebefehl stehen in `server/app/data/README.md`.
+Die Erkennung braucht weder API-Schlüssel noch Internet. Das Update-Skript
+validiert die Datei vor atomarem Ersatz; es gibt keine neue Paketabhängigkeit.
+
+Mehrteilige Ortsnamen funktionieren auch kleingeschrieben. Der Server löst
+Abflug und Ziel getrennt auf. Ein unbekannter oder mehrdeutiger Abflug wird
+erfragt, statt still durch Zürich ersetzt zu werden. Bekannte Stadt-Aliasse
+bleiben erhalten; ein explizites LGW bleibt LGW. Bei mehreren passenden
+Flughäfen erscheinen benannte Optionen mit Land und IATA, und die Bestätigung
+bleibt gesperrt, bis die Auswahl eindeutig ist. Die Herkunft einer ausgewählten
+Flughafenregel ist als Kundenantwort gekennzeichnet.
+
+Neue Flugregeln binden beide bestätigten IATA-Codes. Der Agent übermittelt den
+tatsächlichen Abflughafen des Angebots; Stadtgleichheit erlaubt keinen Wechsel
+von Gatwick zu Heathrow. Diese Regeln gelten nur für Flüge, nicht für Hotels.
+
+Validierung: 136/136 Tests grün inkl. Jev-Buildcheck; gezielter Nachtest der
+Quellenkennzeichnung grün. Zusätzlich alle 9.054 Codes durch die tatsächliche
+Ortssuche geschickt: 9.054 korrekt, keine Provideraufrufe. Browserprüfung auf
+4330: Banja Luka zeigt BNX/ZRH-Regeln; Rio de Janeiro fragt nach GIG/SDU,
+nach SDU-Auswahl ist exakt SDU im Entwurf. Nur Entwürfe geprüft, keine neue
+Leine aktiviert und keine Buchung/Zahlung ausgelöst. Temporären Testtab geschlossen.
+
+Grenzen: Verzeichnisstand ohne Gewähr; keine Flugfelder ohne IATA oder geschlossene
+Einträge. Nicht jede lokale Schreibweise ist enthalten. Quellgemeinde eines
+Flughafens kann ein Vorort sein (z.B. Sepang statt Kuala Lumpur); Flughafenwahl
+ersetzt noch keine präzise Hotelgebietsauswahl. In der laufenden Hauptvorschau
+bleiben Angebote synthetisch, Jev ist weiterhin der echte Inhaltsprüfer.

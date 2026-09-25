@@ -4,7 +4,8 @@
 // 2. Towns without an airport (Zermatt, Positano …): geocode the town (Open-Meteo, no key), then take the nearest
 //    airports from Duffel. The trip then flies to that airport and adds a transfer into town.
 import { fold, levenshtein } from '../leash/util.js';
-import { resolvePlace } from './places.js';
+import { byIata, resolvePlace } from './places.js';
+import { lookupAirports } from './airport-catalog.js';
 
 const MONTHS = 'januar jan january februar feb february märz maerz march mar april apr mai may juni jun june juli jul july august aug september sep sept oktober okt october oct november nov dezember dez december dec';
 const WORDS = `${MONTHS} hotel hotels flug fluege flüge flight flights reise trip ferien urlaub budget chf eur euro franken fr sfr usd gbp extras extra transfer transfers
@@ -12,7 +13,7 @@ const WORDS = `${MONTHS} hotel hotels flug fluege flüge flight flights reise tr
   frau mann freundin freund partner partnerin familie kinder kind max maximal höchstens hoechstens alles zusammen insgesamt total keine kein ohne mit und oder vom von bis ab
   nach im in am an zum zur für fur frag fragen mich mir wenn du unsicher bist stornierbar kostenlos gratis nur ich wir uns möchte moechte will wollen gerne bitte buch buche buchen
   the and to from for with at nights night nächte naechte tage days pro nacht no ask me when uncertain zweifel ablehnen lehn entscheide selbst business economy first class
-  günstig guenstig billig teuer schön schoen city stadt land meer strand berge irgendwo irgendwohin warm sonne`.split(/\s+/).filter(Boolean);
+  günstig guenstig billig teuer schön schoen city stadt land meer strand berge irgendwo irgendwohin warm sonne ist sind mein meine unser unsere bitte maximum mindestens departure departing richtung`.split(/\s+/).filter(Boolean);
 const STOP = new Set(WORDS.map(fold));
 
 const regionDe = (() => { try { const dn = new Intl.DisplayNames(['de'], { type: 'region' }); return (cc) => { try { return cc ? dn.of(cc) : null; } catch { return null; } }; } catch { return () => null; } })();
@@ -24,21 +25,50 @@ export function distanceKm(a, b) {
   return Math.round(12742 * Math.asin(Math.sqrt(h)));
 }
 
-// Candidate place words, most likely first: after "nach/in/to", the opening words, other capitalised words.
+// Keep multiword place names together, regardless of their capitalisation.
+// A travel parameter (date, budget, "Hotel", ...) ends the place phrase.
+function placePhrase(raw, explicit = false) {
+  const words = String(raw).trim().split(/\s+/);
+  const kept = [];
+  for (const word of words) {
+    const w = word.replace(/^[«"(]+|[»").!?]+$/g, '');
+    if (!w || /\d|[,;:\n]/.test(w)) break;
+    const explicitCode = explicit && kept.length === 0 && /^[a-z]{3}$/i.test(w) &&
+      lookupAirports(w).some(p => p.iata_code === w.toUpperCase());
+    if (STOP.has(fold(w)) && !explicitCode) break;
+    if (!/^[\p{L}'’–-]+$/u.test(w)) break;
+    kept.push(w);
+    if (kept.length === 7) break;
+  }
+  return kept.join(' ') || null;
+}
+
+export function placeQuery(text, role = 'destination') {
+  const t = String(text ?? '');
+  const marker = role === 'origin' ? '(?:ab|von|from|departing)' : '(?:nach|to|richtung)';
+  const m = t.match(new RegExp(`(?:^|\\s)${marker}\\s+([^,;:\\n]+)`, 'iu'));
+  if (m) return placePhrase(m[1], true);
+  return role === 'origin' ? null : placePhrase(t.split(/[,;:\n]/)[0]);
+}
+
+// Most specific phrase first. Avoid fragments of a known origin in destination lookup.
 export function placeCandidates(text) {
   const t = String(text ?? '');
   const out = [];
   const add = (s) => {
-    const words = String(s).replace(/[.,;:!?()«»"]+/g, ' ').trim().split(/\s+/).filter(w => w && !/\d/.test(w) && !STOP.has(fold(w)));
-    if (!words.length) return;
-    const phrase = words.slice(0, 3).join(' ');
-    if (phrase.length >= 3 && !out.some(o => fold(o) === fold(phrase))) out.push(phrase);
+    if (!s) return;
+    const words = s.split(/\s+/);
+    for (let n = words.length; n > 0; n--) {
+      const phrase = words.slice(0, n).join(' ');
+      if (phrase.length >= 3 && !STOP.has(fold(phrase)) && !out.some(o => fold(o) === fold(phrase))) out.push(phrase);
+    }
   };
-  for (const m of t.matchAll(/(?:^|\s)(?:nach|to|in|richtung)\s+(\p{L}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+)?)/gu)) add(m[1]);
-  const lead = t.trim().match(/^(\p{L}[\p{L}'’-]+)(?:\s+(\p{L}[\p{L}'’-]+))?/u);
-  if (lead) { add(lead[1]); if (lead[2] && /^\p{Lu}/u.test(lead[2])) add(`${lead[1]} ${lead[2]}`); }
-  for (const m of t.matchAll(/(?:^|[\s,.;:(])(\p{Lu}[\p{L}'’-]{2,})/gu)) add(m[1]);
-  return out.slice(0, 5);
+  const primary = placeQuery(t);
+  if (primary && /^[A-Za-z]{3}$/.test(primary) && /(?:^|\s)(?:nach|to|richtung)\s+/i.test(t)) out.push(primary);
+  add(primary);
+  for (const m of t.matchAll(/(?:^|\s)in\s+([^,;:\n]+)/giu)) add(placePhrase(m[1]));
+  for (const m of t.matchAll(/(?:^|[\s,.;:(])(\p{Lu}[\p{L}'’-]{2,}(?:\s+[\p{L}'’-]+){0,5})/gu)) add(placePhrase(m[1]));
+  return out.slice(0, 12);
 }
 
 // How well an airport search result fits the word the customer wrote:
@@ -64,15 +94,19 @@ const mentionsCountry = (text, cc) => {
 
 export function placeFromDuffel(p, candidate, cls = 3) {
   const cityName = p.city_name ?? p.name;
-  const known = resolvePlace(cityName);
-  if (known && (!p.country || known.country === p.country)) return { ...known, source: 'list' };
+  const known = byIata(p.iata_code) ?? resolvePlace(cityName);
   const iata = p.type === 'airport' ? p.iata_code : (p.airports?.[0] ?? p.iata_code);
+  // Knowing "London" must never replace an explicitly selected LGW with LHR.
+  if (known && (!p.country || known.country === p.country)) return { ...known, iata,
+    aliases: [...new Set([...known.aliases, p.name, iata])], airport_name: p.name,
+    lat: p.lat ?? null, lng: p.lng ?? null, source: p.source ?? 'duffel' };
   // Found through the airport's name (Santorini → airport in Thira): keep the customer's word as the name.
   const viaAirport = cls === 2 && candidate && !` ${fold(cityName).replace(/[^a-z0-9]+/g, ' ')} `.includes(` ${fold(candidate)} `) && /^[\p{L} '-]+$/u.test(candidate);
   const name = viaAirport ? candidate.replace(/^\p{Ll}/u, (ch) => ch.toUpperCase()) : cityName;
   const aliases = [...new Set([name, cityName, candidate, p.iata_code, p.iata_city_code, iata].filter(Boolean))];
   return { city: fold(name).replace(/ /g, '_'), name, en: name, iata, city_iata: p.iata_city_code ?? (p.type === 'city' ? p.iata_code : null),
-    country: p.country, country_name: regionDe(p.country), aliases, lat: p.lat ?? null, lng: p.lng ?? null, source: 'duffel', is_region: viaAirport || undefined };
+    country: p.country, country_name: regionDe(p.country), aliases, airport_name: p.type === 'airport' ? p.name : null,
+    lat: p.lat ?? null, lng: p.lng ?? null, source: p.source ?? 'duffel', is_region: viaAirport || undefined };
 }
 
 const cache = new Map();
@@ -110,30 +144,58 @@ function townPlace(town, airports, candidate) {
 //   { place, alternatives, quote }          – found (airport city, or town + nearest airport)
 //   { choices, quote }                      – several places share the name: ask the customer
 //   null                                    – nothing found
-export async function findPlace(text, duffel, { exclude = [], context = '' } = {}) {
-  const direct = resolvePlace(text);
-  if (direct) return { place: { ...direct, source: 'list' }, alternatives: [] };
+export async function findPlace(text, duffel, { exclude = [], context = '', catalogLookup = lookupAirports } = {}) {
   const skip = new Set(exclude.filter(Boolean).map(fold));
-  const cands = placeCandidates(text).filter(c => !skip.has(fold(c)));
-  const results = await Promise.all(cands.map(c => suggestions(duffel, c).then(list => ({ c, list: list ?? [] }))));
+  const exactCode = /^[a-z]{3}$/i.test(String(text).trim()) ? String(text).trim() : null;
+  const cands = [...new Set([exactCode, ...placeCandidates(text)].filter(Boolean))].filter(c => !skip.has(fold(c)));
   const hint = `${text} ${context}`;
+  const choose = (hits, c, best = 3) => {
+    const groups = new Map();
+    for (const p of hits) {
+      if (skip.has(fold(p.iata_code)) || skip.has(fold(p.city_name)) || skip.has(fold(p.name))) continue;
+      const k = p.type === 'airport' ? p.iata_code : `${fold(p.name)}|${p.country}`;
+      if (!groups.has(k)) groups.set(k, p);
+    }
+    let options = [...groups.values()];
+    if (!options.length) return null;
+    if (best === 0.5) options = options.slice(0, 1);
+    const named = options.filter(p => mentionsCountry(hint, p.country));
+    if (named.length) options = named;
+    if (options.length > 1) return { choices: options.slice(0, 8).map(p => placeFromDuffel(p, c, best)), quote: c };
+    return { place: placeFromDuffel(options[0], c, best), alternatives: [], quote: c };
+  };
+  // The bundled world directory is independent of provider credentials and inventory.
+  for (const c of cands) {
+    const known = resolvePlace(c);
+    let list = catalogLookup(c);
+    if (known) {
+      list = list.filter(p => p.country === known.country);
+      if (!list.length) list = catalogLookup(known.en).filter(p => p.country === known.country);
+      if (!list.length) list = catalogLookup(known.iata);
+    }
+    // A fragment such as "san" in "san unknown" is not the airport code SAN.
+    const isCode = exactCode === c || fold(placeQuery(text)) === fold(c) || /^[A-Z]{3}$/.test(c);
+    if (!isCode && /^[a-z]{3}$/i.test(c)) list = list.filter(p => p.iata_code !== c.toUpperCase());
+    if (list.some(p => p.scheduled_service === true)) list = list.filter(p => p.scheduled_service === true);
+    const found = choose(list, c);
+    if (found) return found;
+    if (known && !skip.has(fold(known.iata)) && !skip.has(fold(known.name))) return { place: { ...known, source: 'list' }, alternatives: [], quote: c };
+  }
+  const direct = resolvePlace(text);
+  if (direct && !skip.has(fold(direct.iata)) && !skip.has(fold(direct.name))) return { place: { ...direct, source: 'list' }, alternatives: [] };
+  // Without an airport provider, geocoding alone cannot establish a bookable airport.
+  if (!duffel?.placeSuggestions || duffel.mode === 'off') return null;
+  const results = await Promise.all(cands.map(c => suggestions(duffel, c).then(list => ({ c, list: list ?? [] }))));
   for (const { c, list } of results) {
     // A typed airport code ("PRN") matches that airport directly.
     // Only the best kind of match counts: an exact city beats a word match beats a typo (Kochi ≠ Sochi).
-    const scored = /^[A-Z]{3}$/.test(c) ? list.filter(p => p.iata_code === c).map(p => ({ p, s: 3 })) : list.map(p => ({ p, s: matchClass(c, p) }));
+    const codeHits = /^[a-z]{3}$/i.test(c) ? list.filter(p => p.iata_code === c.toUpperCase()) : [];
+    const scored = codeHits.length ? codeHits.map(p => ({ p, s: 3 })) : list.map(p => ({ p, s: matchClass(c, p) }));
     const best = Math.max(0, ...scored.map(x => x.s));
     if (!best) continue;
     const hits = scored.filter(x => x.s === best).map(x => x.p);
-    const groups = new Map();
-    for (const p of hits) { const k = `${fold(p.city_name ?? p.name)}|${p.country}`; if (!groups.has(k)) groups.set(k, p); }
-    let options = [...groups.values()];
-    if (best === 0.5) options = options.slice(0, 1); // a country name: take its main airport, don't ask
-    if (options.length > 1) {
-      const named = options.filter(p => mentionsCountry(hint, p.country));
-      if (named.length === 1) options = named;
-      else return { choices: options.slice(0, 4).map(p => placeFromDuffel(p, c, best)), quote: c };
-    }
-    return { place: placeFromDuffel(options[0], c, best), alternatives: [], quote: c };
+    const found = choose(hits, c, best);
+    if (found) return found;
   }
   // No airport by that name: a town without airport? Geocode it and fly to the nearest airport.
   for (const c of cands.slice(0, 3)) {
