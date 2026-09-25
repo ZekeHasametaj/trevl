@@ -1,5 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
+test('custom search understands written passenger counts and never truncates 12 to 2', () => {
+  const draft = compileLocal('Paris vom 16. bis 18. Oktober, zwei Personen, Budget 900 CHF, Hotel kostenlos stornierbar, keine Extras.', {}, new Date('2026-09-25T10:00:00Z'));
+  assert.equal(draft.trip.travelers, 2);
+  assert.equal(draft.trip.destination.name, 'Paris');
+  assert.ok(draft.hard_rules.some(r => r.kind === 'budget_total' && r.value === 900));
+  assert.ok(draft.hard_rules.some(r => r.kind === 'travelers' && r.source.quote === 'zwei Personen'));
+  const group = compileLocal('Paris vom 16. bis 18. Oktober, 12 Personen, Budget 900 CHF.', {}, new Date('2026-09-25T10:00:00Z'));
+  assert.equal(group.trip.travelers, 12);
+});
 import { compileLocal } from '../server/app/compile.js';
 import { sanitize } from '../server/app/llm.js';
 

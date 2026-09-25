@@ -82,7 +82,7 @@ function semanticEvidence(check) {
 const S = {
   config: {}, view: 'welcome', text: '', answers: {}, draft: null, unc: null, compiling: false,
   mandate: null, summary: null, auths: [], authMap: {}, agent: {}, feed: [], wire: [], seen: new Set(), attacks: [],
-  pushId: null, sheet: null, busy: false,
+  pushId: null, sheet: null, busy: false, compileRequest: 0,
 };
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -110,7 +110,15 @@ async function refresh() {
   } catch (e) { console.warn(e); }
 }
 let refreshTimer = null;
-function softRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(async () => { await refresh(); render(); }, 120); }
+function softRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    await refresh();
+    // Live events may refresh the agent state, but must not replace a form while
+    // the customer is typing (including answers to the draft's open questions).
+    if (S.view === 'compose' || S.view === 'draft') renderSides(); else render();
+  }, 120);
+}
 
 // ---------------------------------------------------------------- rendering
 function render() {
@@ -121,10 +129,10 @@ function render() {
   screen.innerHTML = (views[S.view] ?? vWelcome)();
   const tabs = ['trip', 'wallet', 'leash', 'log'];
   const tb = $('#tabbar');
-  tb.hidden = !tabs.includes(S.view);
+  tb.hidden = !S.mandate && !tabs.includes(S.view);
   const pending = S.auths.filter(a => a.status === 'pending').length;
-  tb.innerHTML = [['trip', I.map, 'Reise'], ['wallet', I.wallet, 'Reisekasse'], ['leash', I.leash, 'Leine'], ['log', I.list, 'Protokoll']]
-    .map(([v, ic, l]) => `<button class="tab ${S.view === v ? 'on' : ''}" data-action="tab" data-v="${v}">${ic(22)}${l}${v === 'trip' && pending ? `<span class="badge">${pending}</span>` : ''}</button>`).join('');
+  tb.innerHTML = [['compose', I.plus, 'Suche'], ['trip', I.map, 'Reise'], ['wallet', I.wallet, 'Reisekasse'], ['leash', I.leash, 'Leine'], ['log', I.list, 'Protokoll']]
+    .map(([v, ic, l]) => `<button class="tab ${S.view === v || (v === 'compose' && S.view === 'draft') ? 'on' : ''}" data-action="${v === 'compose' ? 'open-search' : 'tab'}" data-v="${v}">${ic(22)}${l}${v === 'trip' && pending ? `<span class="badge">${pending}</span>` : ''}</button>`).join('');
   const changed = render.lastView !== S.view;
   render.lastView = S.view;
   screen.style.scrollBehavior = 'auto';
@@ -188,18 +196,22 @@ const EXAMPLES = [
 ];
 function vCompose() {
   return `${topbar(S.mandate ? `<button class="pill" data-action="tab" data-v="trip">${I.back(14)} Zurück</button>` : '')}
-    <div class="eyebrow">Neue Leine</div>
-    <h1 class="h1">Wohin soll's gehen?</h1>
-    <p class="lead">Beschreib Reise und Grenzen so, wie du es einer Freundin sagen würdest. trevl macht daraus Regeln, die der Agent nicht brechen kann.</p>
+    <div class="eyebrow">Deine eigene Suche</div>
+    <h1 class="h1">Was soll der Agent suchen?</h1>
+    <p class="lead">Schreib Ort, Datum, Personen und Budget. Dazu deine Wünsche – zum Beispiel ein stornierbares Hotel oder einen Direktflug. Danach prüfst du die Regeln und startest den Agenten.</p>
+    ${S.agent.running ? `<div class="note">Die bisherige Suche läuft noch.<button class="btn btn-ghost btn-sm" data-action="agent-stop">${I.pause(14)} Bisherige Suche anhalten</button></div>` : ''}
     <div class="composer">
-      <textarea id="text" placeholder="z. B. Lissabon im Oktober, alles zusammen max. CHF 1'200, Hotel stornierbar, keine Extras, frag mich, wenn du unsicher bist." aria-label="Deine Reise in eigenen Worten">${esc(S.text)}</textarea>
+      <label class="search-label" for="text">Dein Suchwunsch</label>
+      <textarea id="text" maxlength="2000" placeholder="z. B. Paris vom 16. bis 18. Oktober, zwei Personen, Budget 900 CHF, Hotel kostenlos stornierbar, keine Extras." aria-label="Dein Suchwunsch">${esc(S.text)}</textarea>
       <div class="tools">
         <button class="mic ${S.listening ? 'on' : ''}" data-action="mic" title="Sprechen" aria-label="Sprechen">${I.mic(18)}</button>
-        <span class="small">${S.listening ? 'Ich höre zu …' : 'Tippen oder sprechen'}</span>
+        <span class="small">${S.listening ? 'Ich höre zu …' : 'Freitext'}</span>
         <span class="spacer"></span>
-        <button class="btn btn-primary btn-sm" data-action="compile" ${S.compiling ? 'disabled' : ''}>${S.compiling ? 'Verstehe …' : `${I.spark(15)} Leine entwerfen`}</button>
+        <button class="btn btn-primary btn-sm" data-action="compile" ${S.compiling ? 'disabled' : ''}>${S.compiling ? 'Prüfe …' : `${I.spark(15)} Wunsch prüfen`}</button>
       </div>
     </div>
+    <p class="small search-help">${esc(S.config.duffel_label ?? 'Demo-Flüge')} · ${esc(S.config.hotels_label ?? 'Testmarkt')}. Jev prüft die Inhalte.</p>
+    ${S.mandate ? '<p class="small search-help">Dies ist ein neuer Auftrag. Erst deine Bestätigung ersetzt die bisherige Leine. Bestehende Buchungen bleiben erhalten; das neue Budget übernimmt bisherige Ausgaben nicht.</p>' : ''}
     <div class="section-title"><span class="h3">Beispiele</span></div>
     <div class="chips">${EXAMPLES.map((e, i) => `<button class="chip example" data-action="example" data-i="${i}">${esc(e)}</button>`).join('')}</div>`;
 }
@@ -243,7 +255,8 @@ function vDraft() {
     </div>
     <div class="card" style="margin-top:10px"><details class="assume"><summary>Annahmen von trevl <span class="small">${(d.guidance ?? []).length}</span></summary><ul>${(d.guidance ?? []).map(g => `<li>${esc(g)}</li>`).join('')}</ul></details></div>
     <div class="sticky-cta">
-      <button class="btn btn-primary btn-block" data-action="confirm-draft" ${d.ready ? '' : 'disabled'}>${I.lock(17)} ${d.ready ? 'Leine anlegen und Agent starten' : 'Bitte offene Fragen beantworten'}</button>
+      ${S.mandate ? '<p class="small">Mit dem Start wird die alte Suche angehalten und ihre Leine ersetzt. Das Budget gilt für den neuen Auftrag; alte Buchungen bleiben bestehen.</p>' : ''}
+      <button class="btn btn-primary btn-block" data-action="confirm-draft" ${d.ready && !S.busy ? '' : 'disabled'}>${I.lock(17)} ${S.busy ? 'Starte …' : d.ready ? 'Regeln bestätigen und Suche starten' : 'Bitte offene Fragen beantworten'}</button>
     </div>`;
 }
 
@@ -279,6 +292,7 @@ function vTrip() {
       <div class="eyebrow">${esc(t.origin?.name)} → ${range(t.start_date, t.end_date)} · ${t.travelers} ${t.travelers === 1 ? 'Person' : 'Pers.'}</div>
       <div class="dest" style="font-size:32px;margin:4px 0 0">${esc(t.destination?.name ?? '')}</div>
     </div>
+    <button class="btn btn-primary btn-block search-entry" data-action="new-search">${I.plus(17)} Eigene Suche eingeben</button>
     <div style="margin-top:10px">${kasseMini()}</div>
     ${m.status === 'revoked' ? `<div class="card" style="margin-top:10px;background:var(--no-bg)"><b>Leine gekappt.</b><p class="small" style="margin:4px 0 10px">Der Agent kann nichts mehr kaufen. Bereits Gebuchtes bleibt bestehen.</p><button class="btn btn-primary btn-sm" data-action="go-compose">${I.plus(14)} Neue Leine</button></div>` : ''}
     ${agentBar()}
@@ -543,37 +557,61 @@ function renderSides() {
 
 // ---------------------------------------------------------------- actions
 const A = {
+  'new-search': () => {
+    if (S.busy) return toast('Die Bestätigung läuft gerade.');
+    S.compileRequest += 1;
+    Object.assign(S, { text: '', answers: {}, draft: null, unc: null, compiling: false, view: 'compose' });
+    closeSheet(); render(); setTimeout(() => $('#text')?.focus(), 50);
+  },
+  'open-search': () => {
+    if (S.busy) return toast('Die Bestätigung läuft gerade.');
+    closeSheet(); S.view = S.draft ? 'draft' : 'compose'; render();
+    if (!S.draft) setTimeout(() => $('#text')?.focus(), 50);
+  },
   'go-compose': () => { S.view = 'compose'; render(); setTimeout(() => $('#text')?.focus(), 50); },
   example: (el) => { S.text = EXAMPLES[Number(el.dataset.i)]; render(); },
   tab: (el) => { S.view = el.dataset.v; closeSheet(); render.jump = S.view === 'trip'; render(); },
   mic: () => toggleMic(),
   compile: async () => {
+    if (S.compiling) return;
     S.text = $('#text')?.value ?? S.text;
     if (!S.text.trim()) return toast('Beschreib kurz deine Reise.');
     S.answers = {}; S.unc = null; S.compiling = true; render();
-    try { S.draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); S.view = 'draft'; }
-    catch (e) { toast(e.message); }
-    S.compiling = false; render(); $('#screen').scrollTop = 0;
+    const request = ++S.compileRequest, text = S.text;
+    try {
+      const draft = await api('POST', '/api/compile', { text, answers: S.answers });
+      if (request !== S.compileRequest || S.text !== text) return;
+      S.draft = draft;
+      if (S.view === 'compose') S.view = 'draft';
+    } catch (e) { if (request === S.compileRequest) toast(e.message); }
+    finally { if (request === S.compileRequest) { S.compiling = false; render(); $('#screen').scrollTop = 0; } }
   },
   answer: async (el) => {
     S.answers[el.dataset.q] = el.dataset.v;
-    try { S.draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); } catch (e) { toast(e.message); }
-    render.keepScroll = true; render();
+    const request = ++S.compileRequest;
+    try { const draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); if (request === S.compileRequest) S.draft = draft; }
+    catch (e) { if (request === S.compileRequest) toast(e.message); }
+    if (request === S.compileRequest) { render.keepScroll = true; render(); }
   },
   unc: (el) => { S.unc = el.dataset.v; render.keepScroll = true; render(); },
   'confirm-draft': async () => {
     const d = S.draft;
-    if (!d?.ready) return;
-    await faceId();
+    if (!d?.ready || S.busy) return;
+    S.busy = true; render();
     try {
+      await faceId();
+      await api('POST', '/api/agent/stop');
       const draft = await api('POST', '/api/leash/mandates', { instruction: d.instruction, trip: d.trip, hard_rules: d.hard_rules, uncertainty_policy: S.unc ?? d.uncertainty_policy, guidance: d.guidance, open_questions: d.open_questions, valid_until: d.trip.start_date });
       const m = await api('POST', `/api/leash/mandates/${draft.draft_id}/confirm`, { confirmed: true });
       S.feed = []; S.seen.clear();
       await refresh();
+      S.draft = null; S.text = ''; S.answers = {}; S.unc = null;
       S.view = 'trip'; render.jump = true; render();
       toast('Leine aktiv. Der Agent legt los.');
-      setTimeout(() => api('POST', '/api/agent/start', { mandate_id: m.mandate_id }).then(softRefresh).catch(e => toast(e.message)), 900);
+      await api('POST', '/api/agent/start', { mandate_id: m.mandate_id });
+      softRefresh();
     } catch (e) { toast(e.message); }
+    finally { S.busy = false; render(); }
   },
   'agent-start': async () => { try { await api('POST', '/api/agent/start', { mandate_id: S.mandate.mandate_id }); softRefresh(); } catch (e) { toast(e.message); } },
   'agent-stop': async () => { await api('POST', '/api/agent/stop'); softRefresh(); },
@@ -664,9 +702,11 @@ document.addEventListener('submit', async (e) => {
   const v = f.elements.v.value.trim();
   if (!v) return toast('Bitte ein Ziel eingeben.');
   S.answers[f.dataset.q] = v;
+  const request = ++S.compileRequest;
   f.querySelector('button').textContent = 'Suche …';
-  try { S.draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); } catch (err) { toast(err.message); }
-  render.keepScroll = true; render();
+  try { const draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); if (request === S.compileRequest) S.draft = draft; }
+  catch (err) { if (request === S.compileRequest) toast(err.message); }
+  if (request === S.compileRequest) { render.keepScroll = true; render(); }
 });
 document.addEventListener('input', (e) => {
   const t = e.target;
@@ -726,7 +766,7 @@ function connect() {
     } else if (e.src === 'agent') {
       if (e.type === 'agent.started' || e.type === 'agent.finished') softRefresh();
       else if (S.view === 'trip') render();
-    } else render();
+    } else if (S.view === 'compose' || S.view === 'draft') renderSides(); else render();
   };
   es.onerror = () => { es.close(); setTimeout(() => { connect(); softRefresh(); }, 1500); };
 }

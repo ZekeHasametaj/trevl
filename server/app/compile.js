@@ -140,8 +140,10 @@ export function parseIntent(text, today = new Date()) {
 
   // Travellers.
   const WORDS = { zweit: 2, dritt: 3, viert: 4, funft: 5 };
+  const COUNTS = { ein: 1, eine: 1, zwei: 2, drei: 3, vier: 4, fünf: 5, fuenf: 5, sechs: 6 };
   if ((m = f.match(/zu (zweit|dritt|viert|funft)/))) { intent.travelers = WORDS[m[1]]; intent.travelers_quote = t.match(/zu\s+(zweit|dritt|viert|fünft)/i)?.[0]; }
-  else if ((m = t.match(/(\d)\s*(personen|person|leute|erwachsene|reisende|people|adults|travell?ers|pax)/i))) { intent.travelers = Number(m[1]); intent.travelers_quote = m[0]; }
+  else if ((m = t.match(/\b(ein|eine|zwei|drei|vier|fünf|fuenf|sechs)\s+(personen|person|leute|erwachsene|reisende)\b/i))) { intent.travelers = COUNTS[m[1].toLowerCase()]; intent.travelers_quote = m[0]; }
+  else if ((m = t.match(/\b(\d+)\s*(personen|person|leute|erwachsene|reisende|people|adults|travell?ers|pax)\b/i))) { intent.travelers = Number(m[1]); intent.travelers_quote = m[0]; }
   else if ((m = t.match(/\b(mit meiner|mit meinem|mit (?:der|dem) )\s*(frau|mann|freundin|freund|partnerin|partner|schwester|bruder|mutter|vater|kollegin|kollege)\b/i))) { intent.travelers = 2; intent.travelers_quote = m[0]; }
   else if ((m = t.match(/\b(allein|alleine|solo|nur ich|just me)\b/i))) { intent.travelers = 1; intent.travelers_quote = m[0]; }
   else if ((m = t.match(/\bfür\s+(\d)\b/i))) { intent.travelers = Number(m[1]); intent.travelers_quote = m[0]; }
