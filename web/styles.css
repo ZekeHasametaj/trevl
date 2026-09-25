@@ -189,6 +189,35 @@ details.assume ul { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); f
 .avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #FF8A6A, #FF5A36); color: #fff; display: grid; place-items: center; }
 
 .feed { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+
+/* Final result: recorded bookings and clear reasons together at the end of the run. */
+.trip-result { margin-top: 16px; border: 1px solid var(--line); border-top: 5px solid var(--ask); border-radius: 20px; padding: 18px 16px; background: var(--card); box-shadow: var(--shadow); overflow-wrap: anywhere; }
+.trip-result.success { border-top-color: var(--ok); }
+.trip-result.declined { border-top-color: var(--no); }
+.trip-result .h2 { margin: 5px 0 8px; font-size: 25px; line-height: 1.2; }
+.result-route { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.5; }
+.result-counts { margin: 12px 0; font-size: 12px; font-weight: 700; }
+.result-explanation, .result-next { padding: 10px 12px; border-radius: 10px; background: var(--bg); font-size: 13px; line-height: 1.45; }
+.result-row { padding: 14px 0; border-top: 1px solid var(--line); }
+.result-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.result-row-head strong { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+.result-state { font-size: 10.5px; font-weight: 700; border-radius: 7px; padding: 4px 6px; background: var(--bg-2); text-align: right; }
+.result-state.booked { background: var(--ok-bg); color: var(--ok); }
+.result-state.declined { background: var(--no-bg); color: var(--no); }
+.result-state.uncertain, .result-state.unconfirmed, .result-state.pending { background: var(--ask-bg); color: var(--ask); }
+.result-row p { font-size: 13px; line-height: 1.45; margin: 8px 0; }
+.result-meta, .result-environment { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.result-booking { padding-top: 10px; font-size: 13px; }
+.result-booking > strong { display: block; margin-bottom: 4px; }
+.result-booking-facts { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; margin-top: 6px; font-size: 12px; }
+.result-environment { display: block; margin: 5px 0; }
+.result-row .why { font-size: 12px; margin-top: 7px; }
+.result-money { padding: 12px; border-radius: 12px; background: var(--bg); margin: 4px 0 12px; }
+.result-money div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; line-height: 1.7; }
+.result-money dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.result-next p { margin: 4px 0 0; }
+.result-actions { display: grid; gap: 8px; margin-top: 12px; }
+.result-row .actions { display: flex; gap: 8px; margin-top: 10px; }
 .say { align-self: flex-start; max-width: 88%; background: var(--card); border-radius: 16px 16px 16px 5px; padding: 9px 12px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); box-shadow: 0 1px 1px rgba(0, 0, 0, .03); animation: rise .35s ease both; }
 .say.k-search, .say.k-found { background: transparent; box-shadow: none; padding: 2px 4px; color: var(--muted); font-size: 12.5px; }
 .say.k-warn { background: var(--ask-bg); color: #7A4E0F; }

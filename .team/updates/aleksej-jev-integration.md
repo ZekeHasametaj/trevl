@@ -150,3 +150,32 @@ Einträge. Nicht jede lokale Schreibweise ist enthalten. Quellgemeinde eines
 Flughafens kann ein Vorort sein (z.B. Sepang statt Kuala Lumpur); Flughafenwahl
 ersetzt noch keine präzise Hotelgebietsauswahl. In der laufenden Hauptvorschau
 bleiben Angebote synthetisch, Jev ist weiterhin der echte Inhaltsprüfer.
+
+## Abschlusskarte am Ende des Reiseverlaufs
+
+Nach Ende oder Stopp des Agenten erscheint „Ergebnis deiner Reise“ unter dem
+Verlauf. Die Ansicht springt einmal zum Anfang dieser Karte. Sie zeigt Route,
+Datum, Status je Kategorie, Anbieter, bestätigte Buchungsreferenzen, Kosten,
+Ablehnungsgrund mit Detailknopf und den nächsten Schritt. Nach einer erfolglosen
+Flug-/Hotelsuche ist „Werte anpassen“ direkt hier verfügbar. Der gesamte Verlauf
+bleibt erhalten; zum Verstehen des Endstands muss niemand mehr hochscrollen.
+
+Die Darstellung verwendet gespeicherte Autorisierungen/Buchungen und die
+Agentenereignisse. Nur vorhandene Buchungsbestätigungen zählen als gebucht.
+Freigegeben, aber unbestätigt; offene Kundenfreigabe; unbekannter Buchungsausgang;
+technischer Stopp; keine Angebote und Ablehnung sind getrennte Zustände.
+Die Geldübersicht trennt bestätigte Buchungssumme, noch gebundene Beträge und
+verfügbares Budget. Demo-/Sandbox-Buchungen bleiben ausdrücklich gekennzeichnet.
+Alte bestätigte Buchungen derselben Reise bleiben bei Regelanpassungen sichtbar;
+Ablehnungen alter Regelversionen und andere Reisen werden nicht hineingemischt.
+Ein neuer Suchlauf blendet die vorige Abschlusskarte aus; später bestätigte
+Buchungen ersetzen einen zuvor unbekannten Ausgang korrekt.
+
+Validierung: 144/144 Tests inkl. Jev-Buildcheck grün, JS-Syntax und Diff geprüft.
+Acht neue Tests zu vollständiger/teilweiser Buchung, Ablehnungen, Folgeschritten,
+Freigabe ohne Buchung, Unsicherheit nach Neustart, verspäteter Bestätigung,
+Regelversionen, Retry, offenen Freigaben und Beträgen. Im Browser den vorhandenen
+Tokio-Lauf geprüft: drei Flugablehnungen, Hotel/Transfer nicht weitergesucht,
+0 CHF bestätigt/gebunden, 100 CHF frei, „Werte anpassen“ am Ende. Screenshot
+auf Lesbarkeit geprüft, Suchtext erhalten. Keine neue Buchung/Zahlung ausgelöst.
+Frontend statisch neu geladen; laufenden Server und Backend-Daten beibehalten.

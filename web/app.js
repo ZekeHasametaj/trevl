@@ -1,5 +1,6 @@
 // trevl – phone web app. Plain ES module, no build step.
 // The app never decides anything itself: it shows the leash's decisions and sends the customer's answers.
+import { buildTripResult, bookingEnvironment } from './trip-result.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -136,11 +137,18 @@ function render() {
   const changed = render.lastView !== S.view;
   render.lastView = S.view;
   screen.style.scrollBehavior = 'auto';
-  if (S.view === 'trip') { if (nearBottom || render.jump || changed) screen.scrollTop = screen.scrollHeight; else screen.scrollTop = prevTop; }
+  const result = $('#trip-result', screen);
+  const newResult = result && result.dataset.resultKey !== render.lastResultKey;
+  if (S.view === 'trip' && result && (newResult || render.jump || changed)) {
+    screen.scrollTop += result.getBoundingClientRect().top - screen.getBoundingClientRect().top - 12;
+  } else if (S.view === 'trip') {
+    if (nearBottom || render.jump || changed) screen.scrollTop = screen.scrollHeight; else screen.scrollTop = prevTop;
+  }
   else if (changed) screen.scrollTop = 0;
   else screen.scrollTop = prevTop;
   screen.style.scrollBehavior = '';
   render.jump = false; render.keepScroll = false;
+  if (S.view === 'trip') render.lastResultKey = result?.dataset.resultKey ?? null;
   for (const e of S.feed) S.seen.add(e.id);
   tickCountdowns();
   renderSides();
@@ -314,6 +322,40 @@ function recoveryCard() {
     <p>${esc(block.message)}</p><p class="small">Passe zum Beispiel Preisgrenzen oder Wünsche an. Erst nach deiner Bestätigung geht es weiter.</p>
     <button class="btn btn-primary btn-block" data-action="adjust-values">${I.leash(16)} Werte anpassen</button></div>`;
 }
+
+function tripResultCard() {
+  const r = buildTripResult({ mandate: S.mandate, auths: S.auths, agent: S.agent, feed: S.feed, summary: S.summary, block: currentBlock() });
+  if (!r) return '';
+  const t = S.mandate.trip ?? {};
+  const states = { booked: 'Gebucht', declined: 'Abgelehnt', pending: 'Braucht Freigabe', uncertain: 'Ausgang unklar',
+    unconfirmed: 'Bestätigung fehlt', skipped: 'Nicht weitergesucht', not_found: 'Nichts Passendes gefunden', not_booked: 'Nicht gebucht' };
+  const detailButton = a => a ? `<button class="why" data-action="why" data-id="${esc(a.authorization_id)}">Warum / Details ${I.chev(13)}</button>` : '';
+  const bookingRow = a => {
+    const au = a.authorization, tr = au.travel ?? {}, b = a.booking;
+    return `<div class="result-booking"><strong>${esc(tr.title ?? au.purchase_description ?? 'Buchung')}</strong>
+      <div class="result-meta">${esc(au.merchant?.merchant_name ?? 'Anbieter nicht angegeben')} · ${range(tr.start_date, tr.end_date)}</div>
+      <div class="result-booking-facts"><b class="num">${money(a.decision?.facts?.amount_chf)}</b><span>Bestätigung: <b>${esc(b.booking_reference ?? b.order_id ?? 'gespeichert')}</b></span></div>
+      <small class="result-environment">${esc(bookingEnvironment(b))}</small>${detailButton(a)}</div>`;
+  };
+  return `<section id="trip-result" class="trip-result ${r.tone}" data-result-key="${esc(r.key)}" aria-labelledby="trip-result-title">
+    <div class="eyebrow">${r.settling ? 'Aktueller Stand' : 'Ergebnis deiner Reise'}</div>
+    <h2 id="trip-result-title" class="h2">${esc(r.title)}</h2>
+    <p class="result-route">${esc(t.origin?.name ?? 'Abflug offen')}${t.origin?.iata ? ` (${esc(t.origin.iata)})` : ''} → ${esc(t.destination?.name ?? 'Ziel offen')}${t.destination?.iata ? ` (${esc(t.destination.iata)})` : ''}<br>${range(t.start_date, t.end_date)} · ${t.travelers ?? 1} ${(t.travelers ?? 1) === 1 ? 'Person' : 'Personen'}</p>
+    <div class="result-counts">${r.bookedCount} Buchung${r.bookedCount === 1 ? '' : 'en'} bestätigt · ${r.rejectedCount} Angebot${r.rejectedCount === 1 ? '' : 'e'} abgelehnt</div>
+    ${r.explanation ? `<p class="result-explanation">${esc(r.explanation)}</p>` : ''}
+    <div class="result-rows">${r.rows.map(row => `<article class="result-row"><div class="result-row-head"><strong>${(KIND_ICON[row.kind] ?? I.ticket)(16)} ${esc(row.label)}</strong><span class="result-state ${row.state}">${states[row.state]}</span></div>
+      ${row.bookings.map(bookingRow).join('')}
+      ${row.state !== 'booked' ? `<p>${esc(row.reason)}</p>` : ''}
+      ${row.lastAttempt ? `<div class="result-meta">Zuletzt geprüft: ${esc(row.lastAttempt.authorization.travel?.title ?? row.lastAttempt.authorization.purchase_description ?? 'Angebot')} · ${money(row.lastAttempt.decision?.facts?.amount_chf)}</div>${detailButton(row.lastAttempt)}` : ''}
+      ${row.declines > 0 && row.state === 'booked' ? `<p class="result-meta">${row.declines} Angebot${row.declines === 1 ? '' : 'e'} für diese Kategorie abgelehnt.</p>` : ''}
+      ${row.attention ? `${detailButton(row.attention)}${row.state === 'pending' ? `<div class="actions"><button class="btn btn-no" data-action="decline" data-id="${esc(row.attention.authorization_id)}">Ablehnen</button><button class="btn btn-ok" data-action="approve" data-id="${esc(row.attention.authorization_id)}">Freigeben</button></div>` : ''}` : ''}
+    </article>`).join('')}</div>
+    <dl class="result-money"><div><dt>Bestätigt gebucht</dt><dd>${money(r.bookedAmount)}</dd></div><div><dt>Noch gebunden / offen</dt><dd>${money(r.boundAmount)}</dd></div><div><dt>Budget noch frei</dt><dd>${money(r.freeAmount)}</dd></div></dl>
+    <div class="result-next"><strong>Nächster Schritt</strong><p>${esc(r.next)}</p></div>
+    <div class="result-actions">${r.canAdjust ? `<button class="btn btn-primary btn-block" data-action="adjust-values">${I.leash(16)} Werte anpassen</button>` : ''}
+      <button class="btn btn-ghost btn-block" data-action="tab" data-v="wallet">${I.wallet(16)} Reisekasse ansehen</button></div>
+  </section>`;
+}
 function vTrip() {
   const m = S.mandate;
   if (!m) return vCompose();
@@ -330,7 +372,7 @@ function vTrip() {
     ${m.status === 'revoked' ? `<div class="card" style="margin-top:10px;background:var(--no-bg)"><b>Leine gekappt.</b><p class="small" style="margin:4px 0 10px">Der Agent kann nichts mehr kaufen. Bereits Gebuchtes bleibt bestehen.</p><button class="btn btn-primary btn-sm" data-action="go-compose">${I.plus(14)} Neue Leine</button></div>` : ''}
     ${agentBar()}
     <div class="feed">${items || `<div class="empty">Sobald der Agent sucht, siehst du hier jede Anfrage und jede Entscheidung der Leine.</div>`}</div>
-    ${recoveryCard()}`;
+    ${tripResultCard() || recoveryCard()}`;
 }
 
 function feedItem(e) {
