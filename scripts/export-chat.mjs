@@ -13,12 +13,20 @@ const MAX_FILE = 450_000;     // split long chats so GitHub still renders each p
 
 // 1. Redaction.
 const secrets = [];
-for (const f of ['.env', '.redact']) {
-  const file = path.join(ROOT, f);
-  if (!fs.existsSync(file)) continue;
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-    const v = (line.includes('=') ? line.slice(line.indexOf('=') + 1) : line).trim().replace(/^["']|["']$/g, '');
-    if (v.length >= 8 && !/^(127\.0\.0\.1|0\.0\.0\.0|liteapi|on|off)$/.test(v)) secrets.push(v);
+const replacements = []; // from the local, gitignored .redact: "text" (removed) or "text => replacement" (e.g. full names)
+const envFile = path.join(ROOT, '.env');
+if (fs.existsSync(envFile)) {
+  for (const line of fs.readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+    const v = line.slice(line.indexOf('=') + 1).trim().replace(/^["']|["']$/g, '');
+    if (line.includes('=') && v.length >= 8 && !/^(127\.0\.0\.1|0\.0\.0\.0|liteapi|on|off)$/.test(v)) secrets.push(v);
+  }
+}
+const redactFile = path.join(ROOT, '.redact');
+if (fs.existsSync(redactFile)) {
+  for (const line of fs.readFileSync(redactFile, 'utf8').split(/\r?\n/)) {
+    if (!line.trim() || line.startsWith('#')) continue;
+    const [from, to] = line.split(' => ');
+    if (to !== undefined) replacements.push([from.trim(), to.trim()]); else if (from.trim().length >= 3) secrets.push(from.trim());
   }
 }
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -37,6 +45,10 @@ const PATTERNS = [
   [/C--Users-[A-Za-z0-9._-]*…?/g, '<projekt-id>'],
   [/(?:[A-Za-z]:|\/[a-z])(?:\\+|\/)Users(?:\\+|\/)[^\\/\s"'`]+/g, '~'],
   [/\\+Users\\+[^\\/\s"'`]+/g, '~'],
+  // Shared chat links (they open someone's conversation) and Swiss mobile numbers.
+  [/https?:\/\/(?:chatgpt\.com|chat\.openai\.com|claude\.ai)\/(?:s|share)\/[A-Za-z0-9_-]+/g, '[CHAT-LINK ENTFERNT]'],
+  [/(?:chatgpt\.com|chat\.openai\.com)\/(?:s|share)\/[A-Za-z0-9_-]+/g, '[CHAT-LINK ENTFERNT]'],
+  [/(?:\+41|\b0)[ -]?7[5-9][ -]?\d{3}[ -]?\d{2}[ -]?\d{2}\b/g, '[TELEFON]'],
   // IDs last, so folder names above are replaced as a whole. No \b: "local_<uuid>" must match too.
   [/(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])/gi, '[ID]'],
 ];
@@ -45,6 +57,9 @@ const EMAIL_OK = /@(example\.(com|org)|anthropic\.com)$/i;
 function redact(s) {
   let out = String(s);
   for (const v of secrets) out = out.replace(new RegExp(esc(v), 'g'), '[ENTFERNT]');
+  for (const [from, to] of replacements) out = out.replace(new RegExp(esc(from), 'g'), to);
+  // App-internal markers, also when a shortened tool result cut off the closing tag.
+  out = out.replace(/<artifact-content-authored-by-others\/>/g, '').replace(/<system-reminder>[\s\S]*?(<\/system-reminder>|(?=\n```))/g, '');
   for (const [re, rep] of PATTERNS) out = out.replace(re, rep);
   return out.replace(EMAIL, (m) => (EMAIL_OK.test(m) ? m : '[E-MAIL]'));
 }
