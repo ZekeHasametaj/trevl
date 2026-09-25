@@ -108,8 +108,12 @@ export function sanitize(raw, text) {
 // Parser result as the base; verified model findings fill gaps and add wishes the parser cannot see.
 export function mergeIntents(parsed, model) {
   const out = { ...parsed };
+  // Monetary scope is resolved from the original text, with questions for any
+  // missing unit. A model must not relabel a flight/hotel cap as a trip budget
+  // or silently turn an ambiguous hotel amount into a nightly allowance.
+  const moneyFields = new Set(['budget_total', 'budget_per_person', 'budget_per_booking', 'per_night', 'category_limits', 'money_issues']);
   for (const [k, v] of Object.entries(model)) {
-    if (k === 'other_requests') continue;
+    if (k === 'other_requests' || moneyFields.has(k)) continue;
     if (v != null && (out[k] == null || k.endsWith('_quote') === false)) out[k] = v;
   }
   if (model.start_date) { delete out.month; delete out.year; }

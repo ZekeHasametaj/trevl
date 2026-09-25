@@ -126,7 +126,7 @@ function render() {
   const nearBottom = screen.scrollHeight - screen.scrollTop - screen.clientHeight < 140;
   const prevTop = screen.scrollTop;
   const views = { welcome: vWelcome, compose: vCompose, draft: vDraft, trip: vTrip, wallet: vWallet, leash: vLeash, log: vLog };
-  screen.innerHTML = (views[S.view] ?? vWelcome)();
+  screen.innerHTML = (S.view === 'draft' ? vCompose : views[S.view] ?? vWelcome)();
   const tabs = ['trip', 'wallet', 'leash', 'log'];
   const tb = $('#tabbar');
   tb.hidden = !S.mandate && !tabs.includes(S.view);
@@ -144,6 +144,8 @@ function render() {
   for (const e of S.feed) S.seen.add(e.id);
   tickCountdowns();
   renderSides();
+  if (S.view === 'draft' && S.draft) draftSheet();
+  else if (S.sheet === 'draft') closeSheet();
 }
 
 function topbar(right = '') {
@@ -190,7 +192,7 @@ function heroArt() {
 
 // ----- Compose
 const EXAMPLES = [
-  "Lissabon vom 9. bis 12. Oktober zu zweit, alles zusammen max. CHF 1'500, Hotel kostenlos stornierbar, keine Extras, frag mich, wenn du unsicher bist.",
+  'Paris vom 16. bis 18. Oktober, zwei Personen, Flug maximal 200 CHF, Hotel maximal 150 CHF pro Nacht, Gesamtbudget 900 CHF, frag mich bei Unsicherheit.',
   'Barcelona im November mit meiner Freundin, Budget 1200 Franken, Hotel max 150 pro Nacht, mind. 4 Sterne, im Zweifel ablehnen.',
   'London 23.–26. Oktober, allein, bis CHF 1800, nur Direktflug mit Gepäck, keine Extras.',
 ];
@@ -198,11 +200,11 @@ function vCompose() {
   return `${topbar(S.mandate ? `<button class="pill" data-action="tab" data-v="trip">${I.back(14)} Zurück</button>` : '')}
     <div class="eyebrow">Deine eigene Suche</div>
     <h1 class="h1">Was soll der Agent suchen?</h1>
-    <p class="lead">Schreib Ort, Datum, Personen und Budget. Dazu deine Wünsche – zum Beispiel ein stornierbares Hotel oder einen Direktflug. Danach prüfst du die Regeln und startest den Agenten.</p>
+    <p class="lead">Schreib Ort, Datum, Personen und deine Grenzen: etwa Flug maximal 200 CHF, Hotel maximal 150 CHF pro Nacht und Gesamtbudget 900 CHF. Bei „Wunsch prüfen“ erscheinen die erkannten Regeln. Erst nach deiner Bestätigung startet die Suche.</p>
     ${S.agent.running ? `<div class="note">Die bisherige Suche läuft noch.<button class="btn btn-ghost btn-sm" data-action="agent-stop">${I.pause(14)} Bisherige Suche anhalten</button></div>` : ''}
     <div class="composer">
       <label class="search-label" for="text">Dein Suchwunsch</label>
-      <textarea id="text" maxlength="2000" placeholder="z. B. Paris vom 16. bis 18. Oktober, zwei Personen, Budget 900 CHF, Hotel kostenlos stornierbar, keine Extras." aria-label="Dein Suchwunsch">${esc(S.text)}</textarea>
+      <textarea id="text" maxlength="2000" placeholder="z. B. Paris vom 16. bis 18. Oktober, zwei Personen. Flug maximal 200 CHF, Hotel maximal 150 CHF pro Nacht, Gesamtbudget 900 CHF. Keine Extras, bei Unsicherheit fragen." aria-label="Dein Suchwunsch">${esc(S.text)}</textarea>
       <div class="tools">
         <button class="mic ${S.listening ? 'on' : ''}" data-action="mic" title="Sprechen" aria-label="Sprechen">${I.mic(18)}</button>
         <span class="small">${S.listening ? 'Ich höre zu …' : 'Freitext'}</span>
@@ -227,10 +229,11 @@ function vDraft() {
   const t = d.trip;
   const unc = S.unc ?? d.uncertainty_policy;
   const qs = d.open_questions ?? [];
-  return `${topbar(`<button class="pill" data-action="go-compose">${I.back(14)} Text ändern</button>`)}
-    <div class="eyebrow">Entwurf · noch nicht aktiv</div>
-    <h1 class="h1">Deine Leine</h1>
-    <p class="lead">So hat trevl dich verstanden${d.understood_by === 'model' ? ' (mit KI, von Regeln geprüft)' : ''}. Nichts gilt, bevor du bestätigst.</p>
+  return `<div class="review-heading"><div class="eyebrow">Entwurf · noch nicht aktiv</div><button class="review-close" data-action="close-sheet" aria-label="Regelprüfung abbrechen" ${S.busy ? 'disabled' : ''}>${I.x(18)}</button></div>
+    <h1 class="h2" id="rule-review-title" tabindex="-1">Erkannte Regeln bestätigen</h1>
+    <p class="lead">So hat trevl dich verstanden${d.understood_by === 'model' ? ' (mit KI, von Regeln geprüft)' : ''}. Prüfe besonders Betrag, Kategorie und ob ein Hotellimit pro Nacht gilt. Erst deine Bestätigung startet den Agenten.</p>
+    <div class="section-title"><span class="h3">${d.hard_rules.length} Regeln für den Agenten</span></div>
+    <div class="card review-rules">${d.hard_rules.map(ruleRow).join('')}</div>
     <div class="trip-card">
       <div class="deco">${I.plane(120)}</div>
       <div class="eyebrow">${esc(t.origin?.name ?? 'Zürich')} → </div>
@@ -239,10 +242,8 @@ function vDraft() {
     </div>
     ${qs.length ? `<div class="section-title"><span class="h3">Kurz nachgefragt</span></div>` : ''}
     ${qs.map(q => `<div class="card question"><div class="h3">${esc(q.text)}${q.required ? '<span class="req">nötig</span>' : ''}</div><div class="small">${esc(q.why ?? '')}</div>
-      ${q.input ? `<form class="qinput" data-action="answer-text" data-q="${q.id}"><input name="v" placeholder="${esc(q.input)}" autocomplete="off" aria-label="${esc(q.input)}"><button class="btn btn-primary btn-sm" type="submit">Suchen</button></form>` : ''}
+      ${q.input ? `<form class="qinput" data-action="answer-text" data-q="${q.id}"><input id="question-${esc(q.id)}" name="v" placeholder="${esc(q.input)}" autocomplete="off" aria-label="${esc(q.input)}"><button class="btn btn-primary btn-sm" type="submit">Übernehmen</button></form>` : ''}
       <div class="chips">${q.options.map(o => `<button class="chip ${String(S.answers[q.id] ?? q.default) === String(o.value) ? 'selected' : ''}" data-action="answer" data-q="${q.id}" data-v="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div></div>`).join('')}
-    <div class="section-title"><span class="h3">${d.hard_rules.length} Regeln für den Agenten</span></div>
-    <div class="card">${d.hard_rules.map(ruleRow).join('')}</div>
     <div class="section-title"><span class="h3">Wenn etwas unklar ist</span></div>
     <div class="card"><div class="seg">${['ask', 'decline', 'approve'].map(u => `<button class="${unc === u ? 'on' : ''}" data-action="unc" data-v="${u}">${UNC[u]}</button>`).join('')}</div>
       <p class="small" style="margin:10px 2px 0">${unc === 'ask' ? 'Bei fehlenden Angaben oder Warnsignalen bekommst du eine Nachricht und hast 120 Sekunden Zeit. Ohne Antwort wird abgelehnt.' : unc === 'decline' ? 'Alles Unklare wird abgelehnt. Maximal sicher, aber der Agent findet vielleicht weniger.' : 'Achtung: Unklare Buchungen gehen ohne Rückfrage durch. Gefälschte Seiten und Regelverstösse werden trotzdem blockiert.'}</p></div>
@@ -256,7 +257,8 @@ function vDraft() {
     <div class="card" style="margin-top:10px"><details class="assume"><summary>Annahmen von trevl <span class="small">${(d.guidance ?? []).length}</span></summary><ul>${(d.guidance ?? []).map(g => `<li>${esc(g)}</li>`).join('')}</ul></details></div>
     <div class="sticky-cta">
       ${S.mandate ? '<p class="small">Mit dem Start wird die alte Suche angehalten und ihre Leine ersetzt. Das Budget gilt für den neuen Auftrag; alte Buchungen bleiben bestehen.</p>' : ''}
-      <button class="btn btn-primary btn-block" data-action="confirm-draft" ${d.ready && !S.busy ? '' : 'disabled'}>${I.lock(17)} ${S.busy ? 'Starte …' : d.ready ? 'Regeln bestätigen und Suche starten' : 'Bitte offene Fragen beantworten'}</button>
+      <button class="btn btn-primary btn-block" data-action="confirm-draft" ${d.ready && !S.busy && !S.compiling ? '' : 'disabled'}>${I.lock(17)} ${S.busy ? 'Starte …' : S.compiling ? 'Prüfe Antwort …' : d.ready ? 'Regeln bestätigen und Suche starten' : 'Bitte offene Fragen beantworten'}</button>
+      <button class="btn btn-ghost btn-block review-edit" data-action="go-compose" ${S.busy ? 'disabled' : ''}>${I.back(15)} Text ändern / abbrechen</button>
     </div>`;
 }
 
@@ -450,8 +452,46 @@ function vLog() {
 }
 
 // ---------------------------------------------------------------- sheets
-function openSheet(html, key) { S.sheet = key; $('#sheet').innerHTML = `<div class="grabber"></div>${html}`; $('#sheetWrap').hidden = false; tickCountdowns(); }
-function closeSheet() { S.sheet = null; $('#sheetWrap').hidden = true; }
+function setReviewInert(on) {
+  for (const selector of ['#screen', '#tabbar', '#regie', '#wire', '#push']) $(selector).inert = on;
+}
+function openSheet(html, key) {
+  S.sheet = key;
+  const sheet = $('#sheet');
+  sheet.innerHTML = `<div class="grabber"></div>${html}`;
+  sheet.classList.toggle('rule-review', key === 'draft');
+  if (key === 'draft') {
+    sheet.setAttribute('aria-labelledby', 'rule-review-title');
+    if (S.busy) for (const control of sheet.querySelectorAll('button, input')) control.disabled = true;
+  }
+  else sheet.removeAttribute('aria-labelledby');
+  setReviewInert(key === 'draft');
+  $('#sheetWrap').hidden = false; tickCountdowns();
+}
+function draftSheet() {
+  const sheet = $('#sheet'), wasOpen = S.sheet === 'draft';
+  const scrollTop = wasOpen ? sheet.scrollTop : 0;
+  const active = sheet.contains(document.activeElement) ? document.activeElement : null;
+  const focusId = active?.id;
+  const typedValue = active?.tagName === 'INPUT' ? active.value : undefined;
+  openSheet(vDraft(), 'draft');
+  sheet.scrollTop = scrollTop;
+  if (!wasOpen) $('#rule-review-title').focus({ preventScroll: true });
+  else if (focusId) {
+    const target = document.getElementById(focusId);
+    if (target && typedValue !== undefined) target.value = typedValue;
+    target?.focus({ preventScroll: true });
+  } else $('#rule-review-title').focus({ preventScroll: true });
+}
+function closeSheet() {
+  const wasReview = S.sheet === 'draft';
+  if (wasReview && S.busy && S.view === 'draft') return;
+  S.sheet = null; $('#sheetWrap').hidden = true; setReviewInert(false);
+  if (wasReview && S.view === 'draft') {
+    S.compileRequest += 1; S.compiling = false;
+    S.view = 'compose'; render(); $('#text')?.focus();
+  }
+}
 
 function whySheet(id) {
   const a = S.authMap[id];
@@ -568,8 +608,8 @@ const A = {
     closeSheet(); S.view = S.draft ? 'draft' : 'compose'; render();
     if (!S.draft) setTimeout(() => $('#text')?.focus(), 50);
   },
-  'go-compose': () => { S.view = 'compose'; render(); setTimeout(() => $('#text')?.focus(), 50); },
-  example: (el) => { S.text = EXAMPLES[Number(el.dataset.i)]; render(); },
+  'go-compose': () => { if (S.busy) return; S.compileRequest += 1; S.compiling = false; S.view = 'compose'; closeSheet(); render(); setTimeout(() => $('#text')?.focus(), 50); },
+  example: (el) => { S.compileRequest += 1; S.compiling = false; S.draft = null; S.text = EXAMPLES[Number(el.dataset.i)]; render(); },
   tab: (el) => { S.view = el.dataset.v; closeSheet(); render.jump = S.view === 'trip'; render(); },
   mic: () => toggleMic(),
   compile: async () => {
@@ -587,16 +627,18 @@ const A = {
     finally { if (request === S.compileRequest) { S.compiling = false; render(); $('#screen').scrollTop = 0; } }
   },
   answer: async (el) => {
+    if (S.busy) return;
     S.answers[el.dataset.q] = el.dataset.v;
     const request = ++S.compileRequest;
+    S.compiling = true; render();
     try { const draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); if (request === S.compileRequest) S.draft = draft; }
     catch (e) { if (request === S.compileRequest) toast(e.message); }
-    if (request === S.compileRequest) { render.keepScroll = true; render(); }
+    if (request === S.compileRequest) { S.compiling = false; render.keepScroll = true; render(); }
   },
-  unc: (el) => { S.unc = el.dataset.v; render.keepScroll = true; render(); },
+  unc: (el) => { if (S.busy) return; S.unc = el.dataset.v; render.keepScroll = true; render(); },
   'confirm-draft': async () => {
     const d = S.draft;
-    if (!d?.ready || S.busy) return;
+    if (!d?.ready || S.busy || S.compiling) return;
     S.busy = true; render();
     try {
       await faceId();
@@ -699,22 +741,33 @@ document.addEventListener('submit', async (e) => {
   const f = e.target.closest('form[data-action="answer-text"]');
   if (!f) return;
   e.preventDefault();
+  if (S.busy) return;
   const v = f.elements.v.value.trim();
   if (!v) return toast('Bitte ein Ziel eingeben.');
   S.answers[f.dataset.q] = v;
   const request = ++S.compileRequest;
-  f.querySelector('button').textContent = 'Suche …';
+  S.compiling = true; render();
   try { const draft = await api('POST', '/api/compile', { text: S.text, answers: S.answers }); if (request === S.compileRequest) S.draft = draft; }
   catch (err) { if (request === S.compileRequest) toast(err.message); }
-  if (request === S.compileRequest) { render.keepScroll = true; render(); }
+  if (request === S.compileRequest) { S.compiling = false; render.keepScroll = true; render(); }
 });
 document.addEventListener('input', (e) => {
   const t = e.target;
-  if (t.id === 'text') S.text = t.value;
+  if (t.id === 'text') { S.text = t.value; S.draft = null; }
   if (t.dataset.input === 'budget') { S.edit.budget = Number(t.value); const b = $('#bval'); if (b) b.textContent = money(Number(t.value), 'CHF', { cents: false }); }
   if (t.dataset.input === 'pace') { api('POST', '/api/regie/pace', { pace: Number(t.value) }).then(r => { S.config.pace = r.pace; }); }
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && S.view === 'compose') A.compile(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeSheet();
+  if (e.key === 'Tab' && S.sheet === 'draft') {
+    const focusable = [...$('#sheet').querySelectorAll('button:not(:disabled), input:not(:disabled), summary, [tabindex="0"]')];
+    const first = focusable[0], last = focusable.at(-1), active = document.activeElement;
+    if (!focusable.includes(active) || (e.shiftKey && active === first) || (!e.shiftKey && active === last)) {
+      e.preventDefault(); (e.shiftKey ? last : first)?.focus();
+    }
+  }
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && S.view === 'compose') A.compile();
+});
 
 // ---------------------------------------------------------------- Viseca replay (jury)
 function showViseca(r) {

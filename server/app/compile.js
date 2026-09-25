@@ -71,6 +71,72 @@ export function parseAmount(raw, kilo) {
 }
 const CUR = (s) => { const f = fold(s ?? ''); if (!f) return null; if (/^(eur|euro|€)/.test(f)) return 'EUR'; if (/^(usd|\$|dollar)/.test(f)) return 'USD'; if (/^(gbp|£|pfund)/.test(f)) return 'GBP'; return 'CHF'; };
 
+const PRICE_CATEGORY = /\b(flugs?|fluge|fluege|flights?|hotels?|unterkunft|unterkunfte|transfers?|taxi|aktivitaten?|aktivit[aä]t|activities|activity|ausfluge?|ausflug)\b/g;
+const PRICE_LABEL = { flight: 'Flug', hotel: 'Hotel', transfer: 'Transfer', activity: 'Aktivität' };
+const priceKind = (word) => /^(flug|flueg|flight)/.test(word) ? 'flight' : /^(hotel|unterkunft)/.test(word) ? 'hotel' : /^(transfer|taxi)/.test(word) ? 'transfer' : 'activity';
+
+// Prices keep their category and unit. A hotel price without "per night" or
+// "total" needs a customer answer; it must never become the whole trip budget.
+export function parseMoneyIntent(text) {
+  const t = String(text ?? '');
+  const intent = { category_limits: [], money_issues: [] };
+  const moneyRe = /(max(?:imal)?\.?|höchstens|hoechstens|bis zu|bis|budget(?: von)?|insgesamt|total|zusammen|nicht mehr als|up to|under|unter|limit)?\s*(chf|sfr\.?|fr\.|franken|eur|euro|€|usd|\$|gbp|£)?\s*(-?\d[\d'’.,]*\d|-?\d)\s*(k\b)?\s*(\.-|-)?\s*(chf|sfr\.?|fr\.|franken|eur|euro|€|usd|\$|gbp|£)?/gi;
+  const matches = [...t.matchAll(moneyRe)].filter(mm => {
+    const [, keyword, cur1, num, , , cur2] = mm;
+    if (!cur1 && !cur2 && (!keyword || /^(bis|unter|under)$/i.test(keyword))) return false;
+    const after = t.slice(mm.index + mm[0].length).trimStart();
+    if (!cur1 && !cur2 && (new RegExp(`^(${MONTH_RE})\\b`, 'i').test(after) || /^\.?\s*\d|^(personen|sterne|stars|people|tage|days)\b/i.test(after))) return false;
+    return !/\d\.\d{1,2}\.$|^\d{1,2}\.$/.test(num);
+  });
+  let consumedCategoryEnd = 0;
+  for (let i = 0; i < matches.length; i++) {
+    const mm = matches[i];
+    const [whole, , cur1, num, kilo, , cur2] = mm;
+    const end = mm.index + whole.length;
+    // Bound context by other prices and clause separators, so adjacent limits
+    // cannot borrow another category or its "pro Nacht" unit.
+    const clauseBreak = /[,;!?\n]|\.(?=\s|$)|\bund\b|\band\b/i;
+    const beforeRaw = t.slice(Math.max(consumedCategoryEnd, i ? matches[i - 1].index + matches[i - 1][0].length : 0), mm.index).split(clauseBreak).at(-1);
+    let afterRaw = t.slice(end, matches[i + 1]?.index ?? t.length).split(clauseBreak)[0];
+    const before = fold(beforeRaw), after = fold(afterRaw);
+    const preceding = [...before.matchAll(PRICE_CATEGORY)].at(-1);
+    const following = [...after.matchAll(PRICE_CATEGORY)][0];
+    // "CHF 900 Hotel stornierbar" still describes a total, not a hotel price.
+    const followsPrice = following && /^\s*(?:(?:fur|for)\s+(?:(?:den|das|die|a|the)\s+)?)?$/.test(after.slice(0, following.index))
+      && !/^\s*(?:kostenlos\s+)?(?:stornierbar|refundable|cancellable)/.test(after.slice(following.index + following[0].length));
+    const explicitTrip = /\b(gesamtbudget|reisebudget|trip budget|overall budget|alles zusammen|alle ausgaben zusammen|ganze reise)\b/.test(before + fold(whole));
+    const category = explicitTrip ? null : preceding ? priceKind(preceding[0]) : followsPrice ? priceKind(following[0]) : null;
+    if (category && !preceding && followsPrice) consumedCategoryEnd = end + following.index + following[0].length;
+    // In "Flug 200 CHF Hotel pro Nacht 150 CHF", Hotel belongs to the next
+    // amount. Its nightly unit must not leak into the flight allowance.
+    if (preceding && following) afterRaw = afterRaw.slice(0, following.index);
+    const context = `${category && preceding ? before.slice(preceding.index) : before} ${fold(whole)} ${fold(afterRaw)}`;
+    const amount = parseAmount(num, kilo);
+    const quoteStart = preceding && !explicitTrip ? mm.index - beforeRaw.length + preceding.index : mm.index;
+    const quoteEnd = category || /\b(nacht|night|person|buchung|booking)\b/.test(after) ? end + afterRaw.length : end;
+    const entry = { amount, currency: CUR(cur1 || cur2) ?? 'CHF', quote: t.slice(quoteStart, quoteEnd).trim(), hasCur: !!(cur1 || cur2) };
+    if (amount == null || amount < 0 || !Number.isSafeInteger(Math.round(amount * 100)) || /-\s*$/.test(beforeRaw) || /-\s*$/.test(whole.slice(0, whole.indexOf(num)))) {
+      intent.money_issues.push({ quote: entry.quote, text: `Der Betrag «${entry.quote}» ist ungültig. Bitte im Suchwunsch korrigieren.` });
+      continue;
+    }
+    const nightly = /\b(?:pro|je|per)\s*(?:nacht|night|ubernachtung)|\/\s*(?:nacht|night)\b/.test(context);
+    const perPerson = /\b(?:pro|je|per)\s*(?:person|kopf|pers|travell?er)|\bp\.?\s*p\.?\b/.test(context);
+    const perBooking = /\b(?:pro|je|per)\s*(?:buchung|booking|kauf|einkauf)\b/.test(context);
+    const total = /\b(insgesamt|gesamt|total|ganzen? aufenthalt|gesamten? aufenthalt|whole stay)\b/.test(context);
+    if (category && ['activity', 'transfer'].includes(category) && total && !perBooking) {
+      intent.money_issues.push({ quote: entry.quote, text: `«${entry.quote}»: Ein gemeinsames Limit für mehrere ${category === 'activity' ? 'Aktivitäten' : 'Transfers'} ist noch nicht unterstützt. Bitte ein Gesamtbudget für die Reise oder ein Limit pro Buchung angeben.` });
+      continue;
+    }
+    if (category) {
+      intent.category_limits.push({ ...entry, category, unit: nightly ? 'night' : category === 'hotel' && !total && !perBooking ? 'unclear' : 'booking', per_person: perPerson });
+    } else if (nightly) intent.per_night = entry;
+    else if (perBooking) intent.budget_per_booking = entry;
+    else if (perPerson) intent.budget_per_person = entry;
+    else if (!intent.budget_total || (!intent.budget_total.hasCur && entry.hasCur)) intent.budget_total = entry;
+  }
+  return intent;
+}
+
 // Step 1a: deterministic understanding. Returns an "intent" with verbatim quotes from the text.
 export function parseIntent(text, today = new Date()) {
   const t = String(text ?? '');
@@ -148,25 +214,7 @@ export function parseIntent(text, today = new Date()) {
   else if ((m = t.match(/\b(allein|alleine|solo|nur ich|just me)\b/i))) { intent.travelers = 1; intent.travelers_quote = m[0]; }
   else if ((m = t.match(/\bfür\s+(\d)\b/i))) { intent.travelers = Number(m[1]); intent.travelers_quote = m[0]; }
 
-  // Money. Needs a currency or a budget keyword so dates are never read as prices.
-  const moneyRe = /(max(?:imal)?\.?|höchstens|hoechstens|bis zu|bis|budget(?: von)?|insgesamt|total|zusammen|nicht mehr als|up to|under|unter|limit)?\s*(chf|sfr\.?|fr\.|franken|eur|euro|€|usd|\$|gbp|£)?\s*(\d[\d'’.,]*\d|\d)\s*(k\b)?\s*(\.-|-)?\s*(chf|sfr\.?|fr\.|franken|eur|euro|€|usd|\$|gbp|£)?/gi;
-  for (const mm of t.matchAll(moneyRe)) {
-    const [whole, keyword, cur1, num, kilo, , cur2] = mm;
-    const strongKeyword = keyword && !/^(bis|unter|under)$/i.test(keyword.trim());
-    if (!cur1 && !cur2 && !strongKeyword) continue;
-    const next = t.slice(mm.index + whole.length - (cur2 ? cur2.length : 0)).trimStart();
-    if (!cur1 && !cur2 && (/^\.\s*(\d|[a-zäöü]{3,})/i.test(t.slice(mm.index + mm[0].length).trimStart()) || new RegExp(`^(${MONTH_RE})\\b`, 'i').test(next))) continue; // "bis 12. Oktober"
-    if (/\d\.\d{1,2}\.$/.test(num) || /^\d{1,2}\.$/.test(num)) continue; // dates like 9.10.
-    const amount = parseAmount(num, kilo);
-    if (amount == null || amount < 10) continue;
-    const after = fold(t.slice(mm.index + whole.length, mm.index + whole.length + 28));
-    const before = fold(t.slice(Math.max(0, mm.index - 28), mm.index));
-    const entry = { amount, currency: CUR(cur1 || cur2) ?? 'CHF', quote: whole.trim(), hasCur: !!(cur1 || cur2) };
-    if (/^\s*(pro|je|per|\/)\s*(nacht|night|ubernachtung)/.test(after) || /(hotel|zimmer)[^.,]{0,15}$/.test(before) && /nacht|night/.test(after)) intent.per_night = entry;
-    else if (/^\s*(pro|je|per)\s*(buchung|booking|kauf|einkauf)/.test(after)) intent.budget_per_booking = entry;
-    else if (/^\s*(pro|je|per)\s*(person|kopf|pers)|^\s*p\.?\s*p\.?/.test(after)) intent.budget_per_person = entry;
-    else if (!intent.budget_total || (!intent.budget_total.hasCur && entry.hasCur)) intent.budget_total = entry;
-  }
+  Object.assign(intent, parseMoneyIntent(t));
 
   // Conditions.
   if ((m = t.match(/[^.,;]*\b(stornierbar\w*|stornier\w*|storno\w*|refundable|free cancell?ation|cancell?able)\b[^.,;]*/i))) {
@@ -270,6 +318,33 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
   if (!I.no_extras) questions.push({ id: 'extras', required: false, text: 'Darf der Agent Extras dazubuchen (Sitzplatz, Versicherung …)?', options: [{ value: 'none', label: 'Nein, keine Extras' }, { value: 'bags', label: 'Nur Gepäck' }, { value: 'any', label: 'Ja, egal' }], why: 'Extras sind die häufigste versteckte Kostenfalle.' });
   if (!I.cancellable) questions.push({ id: 'cancellable', required: false, text: 'Nur Hotels, die man kostenlos stornieren kann?', options: [{ value: 'yes', label: 'Ja, nur stornierbar' }, { value: 'any', label: 'Egal' }], why: 'Schützt dich, falls sich Pläne ändern.' });
 
+  for (const [i, issue] of (I.money_issues ?? []).entries()) questions.push({ id: `price_invalid_${i}`, required: true, text: issue.text, options: [], why: 'Über „Text ändern“ kannst du den Betrag korrigieren. Daraus wird keine Freigabe abgeleitet.' });
+  for (const [i, cap] of (I.category_limits ?? []).entries()) {
+    let unit = cap.unit;
+    if (unit === 'unclear') {
+      const answer = a[`price_scope_${i}`];
+      if (['night', 'booking'].includes(answer)) unit = answer;
+      else {
+        questions.push({ id: `price_scope_${i}`, required: true, text: `Hotel: ${fmtMoney(cap.amount, cap.currency)}${cap.per_person ? ' pro Person' : ''} – pro Nacht oder für den ganzen Aufenthalt?`,
+          options: [{ value: 'night', label: 'Pro Nacht' }, { value: 'booking', label: 'Ganzer Aufenthalt' }], why: `Du schreibst «${cap.quote}». Die Leine übernimmt das erst nach deiner Antwort.` });
+        continue;
+      }
+    }
+    if (unit === 'night' && cap.category !== 'hotel') {
+      questions.push({ id: `price_scope_${i}`, required: true, text: `«${cap.quote}»: Ein Nachtlimit ist nur für Hotels verfügbar.`, options: [], why: 'Bitte den Suchwunsch über „Text ändern“ präzisieren.' });
+      continue;
+    }
+    const value = cap.amount * (cap.per_person ? travelers : 1);
+    const nightly = unit === 'night';
+    const baseId = nightly ? 'per_night' : `budget_${cap.category}`;
+    const id = rules.some(r => r.id === baseId) ? `${baseId}_${i}` : baseId;
+    rules.push({ id, kind: nightly ? 'per_night' : 'budget_purchase',
+      label: `${PRICE_LABEL[cap.category]} höchstens ${fmtMoney(value, cap.currency).replace('.00', '')} ${nightly ? 'pro Nacht' : cap.category === 'hotel' ? 'für den ganzen Aufenthalt' : 'pro Buchung'} (alle Reisenden)`,
+      field: nightly ? 'travel.price_per_night_chf' : 'authorization.billing_amount_chf', operator: '<=', value, currency: cap.currency,
+      ...(nightly ? {} : { scope: 'purchase' }), applies_to: [cap.category], source: cap.unit === 'unclear' ? { type: 'answer', quote: cap.quote } : src(cap.quote) });
+    if (cap.per_person) guidance.push(`${PRICE_LABEL[cap.category]}: ${fmtMoney(cap.amount, cap.currency)} pro Person × ${travelers} Reisende = ${fmtMoney(value, cap.currency)}${nightly ? ' pro Nacht' : ' pro Buchung'}.`);
+  }
+
   // Rules.
   if (I.budget_total || I.budget_per_person) {
     const b = I.budget_total ?? I.budget_per_person;
@@ -297,7 +372,7 @@ export function buildDraft(text, intent, answers = {}, today = new Date()) {
   if (I.direct) rules.push({ id: 'direct', kind: 'direct', label: 'Nur Direktflüge', field: 'travel.stops', operator: '<=', value: 0, applies_to: ['flight'], source: src(I.direct.quote) });
   if (I.min_stars) rules.push({ id: 'stars', kind: 'stars', label: `Hotel mindestens ${I.min_stars.value} Sterne`, field: 'travel.stars', operator: '>=', value: I.min_stars.value, applies_to: ['hotel'], source: src(I.min_stars.quote) });
   if (I.cabin) rules.push({ id: 'cabin', kind: 'cabin', label: `Klasse: ${I.cabin.value}`, field: 'travel.cabin_class', operator: '=', value: I.cabin.value, applies_to: ['flight'], source: src(I.cabin.quote) });
-  let kinds = I.only?.value ?? ['flight', 'hotel', 'transfer', ...(I.activities ? ['activity'] : [])];
+  let kinds = I.only?.value ?? ['flight', 'hotel', 'transfer', ...(I.activities || I.category_limits?.some(c => c.category === 'activity') ? ['activity'] : [])];
   if (I.no_transfer) kinds = kinds.filter(k => k !== 'transfer');
   const KL = { flight: 'Flug', hotel: 'Hotel', transfer: 'Transfer', activity: 'Aktivitäten' };
   rules.push({ id: 'categories', kind: 'categories', label: `Nur ${kinds.map(k => KL[k]).join(', ')}`, field: 'travel.kind', operator: 'in', value: kinds, source: I.only ? src(I.only.quote) : { type: 'default', quote: null } });

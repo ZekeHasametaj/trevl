@@ -96,7 +96,9 @@ export function buildFacts(a) {
     'travel.checked_bags': t.checked_bags ?? null,
     'travel.stars': t.stars ?? null,
     'travel.nights': nights,
-    'travel.price_per_night_chf': t.kind === 'hotel' && chf != null && nights > 0 ? round2(chf / nights) : null,
+    // Keep precision for the rule comparison: rounding a three-night average
+    // could conceal a one-cent overrun of the confirmed nightly ceiling.
+    'travel.price_per_night_chf': t.kind === 'hotel' && chf != null && nights > 0 ? chf / nights : null,
   };
 }
 
@@ -142,6 +144,12 @@ function budgetCheck(rule, ctx) {
 function ruleCheck(rule, ctx) {
   const { facts, auth } = ctx;
   const kind = facts['travel.kind'];
+  // A category price ceiling needs a category; applying every ceiling to an
+  // unclassified purchase would invent a restriction and could also approve it.
+  if (rule.applies_to?.length && ['budget_purchase', 'per_night'].includes(rule.kind) && isMissing(kind)) {
+    return { status: 'unknown', reason_code: 'category_unknown', detail: `Buchungsart fehlt; ${rule.label} kann noch nicht geprüft werden.`,
+      sentence: 'Die Buchungsart fehlt. Erst klären, welches Preislimit für diesen Kauf gilt.' };
+  }
   if (rule.applies_to && kind && !rule.applies_to.includes(kind)) return { status: 'na', detail: `Gilt nur für ${rule.applies_to.map(k => KIND_LABEL[k] ?? k).join(', ')}.` };
   if (rule.field === 'authorization.billing_amount_chf' && rule.scope === 'period') return budgetCheck(rule, ctx);
 
@@ -233,7 +241,7 @@ export function evaluate({ auth, mandate, ledger = [], registry = DEFAULT_REGIST
     if (r.status === 'na') continue;
     const codes = REASON_BY_KIND[rule.kind] ?? ['rule_failed', 'rule_unknown'];
     checks.push({ rule_id: rule.id, kind: rule.kind, label: rule.label, status: r.status, detail: r.detail, sentence: r.sentence ?? null,
-      reason_code: r.status === 'fail' ? codes[0] : r.status === 'unknown' ? codes[1] : null, source: rule.source ?? null });
+      reason_code: r.reason_code ?? (r.status === 'fail' ? codes[0] : r.status === 'unknown' ? codes[1] : null), source: rule.source ?? null });
   }
 
   // 4. Untrusted merchant text: flag instructions, report claims, never use them as evidence.
@@ -288,7 +296,7 @@ export function evaluate({ auth, mandate, ledger = [], registry = DEFAULT_REGIST
     const other = same.find(e => e.merchant_id !== auth.merchant?.merchant_id && within(e, 7 * 864e5));
     if (twin) signals.push({ code: 'duplicate_booking', severity: 'block', text: `Doppelte Bestellung: dieselben Artikel bei ${twin.merchant_name} wurden am ${fmtDate(twin.timestamp)} schon ${twin.status === 'approved' ? 'gekauft' : 'angefragt'} (${fmtMoney(twin.amount_chf)}).` });
     else if (other) evidence.push({ fact: 'Ähnlicher Kauf', source: 'Verlauf der Leine', value: `Dasselbe wurde am ${fmtDate(other.timestamp)} schon bei ${other.merchant_name} gekauft (${fmtMoney(other.amount_chf)}).` });
-    const perOrder = mandate.hard_rules.find(r => r.kind === 'budget_purchase');
+    const perOrder = mandate.hard_rules.find(r => r.kind === 'budget_purchase' && !r.applies_to?.length);
     const split = perOrder && chf != null && ctx.prior.find(e => e.status === 'approved' && e.merchant_id === auth.merchant?.merchant_id && within(e, 15 * 60e3) && e.amount_chf + chf > perOrder.value);
     if (split) signals.push({ code: 'split_order', severity: 'warn', text: `Zusammen mit der Bestellung von ${Math.round((ts - Date.parse(split.timestamp)) / 60e3)} Minuten zuvor (${fmtMoney(split.amount_chf)}) über deinem Limit pro Bestellung – aufgeteilte Bestellung?` });
   }
@@ -337,9 +345,12 @@ export function evaluate({ auth, mandate, ledger = [], registry = DEFAULT_REGIST
   } else if (unknowns.length || warns.length) {
     reason_codes.push(...unknowns.map(c => c.reason_code), ...warns.map(s => s.code));
     const policy = mandate.uncertainty_policy;
-    decision = policy === 'ask' ? 'step_up' : policy;
+    const missingPriceCategory = unknowns.some(c => c.reason_code === 'category_unknown' && ['budget_purchase', 'per_night'].includes(c.kind));
+    decision = missingPriceCategory && policy === 'approve' ? 'step_up' : policy === 'ask' ? 'step_up' : policy;
     headline = decision === 'step_up' ? 'trevl fragt dich' : decision === 'decline' ? `${K} abgelehnt` : `${K} freigegeben – mit Vorbehalt`;
-    summary = `${uncertainty[0]} Deine Regel für Unsicherheit: ${UNC_LABEL[policy]}.`;
+    summary = missingPriceCategory && policy === 'approve'
+      ? `${uncertainty[0]} Ohne Buchungsart kann dein Preislimit nicht geprüft werden; dafür braucht es deine Rückfrage.`
+      : `${uncertainty[0]} Deine Regel für Unsicherheit: ${UNC_LABEL[policy]}.`;
     if (decision === 'step_up') reason_codes.push('customer_confirmation');
   } else {
     decision = 'approve';

@@ -34,3 +34,34 @@ dabei keine neue Buchung oder Zahlung ausgelöst.
 
 Lokale Vorschau: http://127.0.0.1:4330/ – Suchfeld geöffnet. Aktuell sind die
 Angebote synthetisch, die angeschlossene Jev-Inhaltsprüfung ist echt.
+
+## Preisgrenzen aus Freitext und Bestätigungs-Popup
+
+„200 CHF Flug maximum, Hotel maximal 150 CHF pro Nacht, Gesamtbudget 900 CHF“
+erzeugt getrennte ausführbare Leash-Regeln. Unterstützt sind Flug-, Hotel-,
+Transfer- und Aktivitätenlimits pro Buchung; ein Hotel kann zusätzlich einen
+Nachtpreis oder einen Höchstpreis für den gesamten Aufenthalt erhalten.
+Explizite Preise pro Person werden mit der bestätigten Personenzahl verrechnet.
+Ein fehlendes Gesamtbudget wird erfragt und nicht aus einem Kategoriepreis geraten.
+„Hotel 150 CHF“ verlangt die Auswahl „Pro Nacht“ oder „Ganzer Aufenthalt“.
+Ein gemeinsames Aktivitäten-/Transferbudget über mehrere Buchungen ist noch
+nicht unterstützt und blockiert die Bestätigung mit einer Erklärung.
+
+„Wunsch prüfen“ öffnet einen Dialog mit Regeln und Originalzitaten; erst der
+Bestätigungsknopf aktiviert den neuen Auftrag und startet die Suche. Rückfragen
+bleiben im Dialog beantwortbar. Abbrechen erhält den Text und verändert die
+aktuelle Leine nicht. Während einer Antwortprüfung bleibt Bestätigen gesperrt.
+Live-Ereignisse überschreiben weiterhin keine Entwürfe.
+
+Monetäre Zuordnung bleibt auch bei optionaler KI-Übersetzung im Regel-Parser,
+damit eine Modellantwort Kategoriepreise nicht zu Gesamtbudgets umdeutet.
+Die Leash berücksichtigt nur passende Kategoriegrenzen; fehlende Kategorien
+führen zur Rückfrage, klare andere Verstösse bleiben abgelehnt. Nachtpreis-
+Vergleiche runden kleine Überschreitungen nicht mehr weg.
+
+Validierung: 92/92 Offline-Tests grün, JS-Syntax und Diff geprüft. Unter anderem
+Freitext → Leash-Entscheidung, Grenzbetrag, ein Rappen zu viel, Hotel-Nachtpreis,
+mehrere Caps, negative/fehlende Angaben, Personenpreis und Modell-Umdeutung.
+Im Browser Popup, Hotel-Rückfrage, anschliessend aktivierter Bestätigungsknopf
+und Abbruch ohne Textverlust geprüft. Die bestehende Belgrad-Leine unverändert
+gelassen; keine neue Buchung/Zahlung und kein zusätzlicher Jev-Modelltest.
