@@ -3,6 +3,8 @@
 // It is deliberately a "normal" agent: it likes cheap offers and learns only from the leash's answers.
 import { hotelOffers, transferOffers, activityOffers } from './market.js';
 import { uid } from '../leash/util.js';
+import { evaluate } from '../leash/evaluate.js';
+import { isDeepStrictEqual } from 'node:util';
 import { runAiAgent } from './ai-agent.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -96,53 +98,94 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
     return list.sort((a, b) => a.amount - b.amount);
   }
 
+  const contract = (a) => ({ amount: a.amount, currency: a.currency, order_cancellable: a.order_cancellable,
+    order_returnable: a.order_returnable, merchant: a.merchant, items: a.items, travel: a.travel, purchase_description: a.purchase_description });
+  const stopped = (r) => r.stopped || run !== r;
+  function blockExecution(r, text) {
+    r.stopped = true;
+    say('stop', `Buchung angehalten: ${text}`);
+    return false;
+  }
+
+  async function executionAllowed(r, offer, auth) {
+    if (stopped(r)) return false;
+    const current = await leash('GET', `/v1/authorizations/${auth.authorization_id}`);
+    if (stopped(r)) return false;
+    if (current.status !== 'approved' || current.booking) return blockExecution(r, 'Diese Freigabe ist nicht offen oder bereits als gebucht gespeichert.');
+    if (current.authorization?.mandate_id !== r.mandate.mandate_id || !isDeepStrictEqual(contract(current.authorization), contract(toAuthorization(r.mandate, offer)))) {
+      return blockExecution(r, 'Die aktuelle Freigabe gehört zu anderen Kaufdaten. Bitte erneut prüfen.');
+    }
+    const summary = await leash('GET', `/v1/mandates/${r.mandate.mandate_id}/summary`);
+    if (stopped(r)) return false;
+    const mandate = await leash('GET', `/v1/mandates/${r.mandate.mandate_id}`);
+    if (stopped(r)) return false;
+    if (mandate.status !== 'active' || summary.status !== 'active' || summary.version !== mandate.version) return blockExecution(r, 'Die Leine wurde pausiert, widerrufen oder während der Prüfung verändert.');
+    if (mandate.valid_until && (!Number.isFinite(Date.parse(mandate.valid_until)) || Date.parse(mandate.valid_until) <= Date.now())) return blockExecution(r, 'Die Leine ist abgelaufen oder ihre Gültigkeit ist unklar.');
+    const ownAmount = current.decision?.facts?.amount_chf;
+    if (![summary.approved, summary.pending, ownAmount].every((value) => Number.isFinite(value) && value >= 0) || summary.approved + 1e-9 < ownAmount) return blockExecution(r, 'Die aktuelle Budgetbindung konnte nicht nachgewiesen werden.');
+    // The agent GET API exposes aggregate spend, not the full ledger. Counting all
+    // outstanding spend in every period is conservative; it cannot invent free budget.
+    const ledger = [
+      { authorization_id: 'execution-other-approved', status: 'approved', amount_chf: Math.max(0, summary.approved - ownAmount) },
+      { authorization_id: 'execution-other-pending', status: 'pending', amount_chf: summary.pending },
+    ].map((entry) => ({ ...entry, mandate_id: mandate.mandate_id, timestamp: current.authorization.timestamp }));
+    const familiar = current.decision?.merchant_trust === 'known' ? new Set([current.authorization.merchant?.merchant_id]) : new Set();
+    const checked = evaluate({ auth: current.authorization, mandate, ledger, familiar });
+    const unclearBudget = checked.checks.some((check) => check.status === 'unknown' && mandate.hard_rules.some((rule) => rule.id === check.rule_id && rule.field === 'authorization.billing_amount_chf' && rule.scope === 'period'));
+    if (checked.checks.some((check) => check.status === 'fail') || checked.signals.some((signal) => signal.severity === 'block') || unclearBudget) return blockExecution(r, checked.summary);
+    if (current.decision?.mandate_version !== mandate.version) return blockExecution(r, 'Die Regeln wurden seit der Freigabe geändert. Eine neue Prüfung ist erforderlich.');
+    return !stopped(r);
+  }
+
   async function execute(r, offer, auth) {
-    if (offer.kind === 'flight') {
-      say('book', `Buche ${offer.title} bei ${offer.flight.demo ? 'Demo-Anbieter' : 'Duffel (Testmodus)'} …`);
-      try {
+    if (stopped(r)) return { blocked: true };
+    let submitted = false;
+    try {
+      let candidate = offer, book, label;
+      let termsChanged = false;
+      if (offer.kind === 'flight') {
+        say('book', `Prüfe das Flugangebot vor der Buchung erneut …`);
         const fresh = await duffel.refresh(offer.flight);
-        if (Math.abs(fresh.amount - offer.flight.amount) > 0.009) {
-          say('warn', `Preis hat sich geändert: ${offer.flight.total_currency} ${offer.flight.amount} → ${fresh.total_currency} ${fresh.amount}. Ich frage die Leine neu.`);
-          await leash('POST', `/v1/authorizations/${auth.authorization_id}/void`, { reason: 'Preis vor Buchung geändert' });
-          return { requote: { ...offer, amount: fresh.amount, flight: fresh }, related: auth.authorization_id };
-        }
-        const b = await duffel.book(fresh, auth.authorization_id);
-        await leash('POST', `/v1/authorizations/${auth.authorization_id}/booked`, b);
-        say('booked', `Gebucht: ${offer.title} · Buchungsnummer ${b.booking_reference}${b.demo ? ' (Demo)' : ' (Duffel-Test)'}`, { authorization_id: auth.authorization_id, booking: b });
-        r.booked?.add(offer.kind);
-        return { booked: true, booking: b };
-      } catch (e) {
-        say('warn', `Buchung fehlgeschlagen: ${e.message}. Budget wird wieder freigegeben.`);
-        await leash('POST', `/v1/authorizations/${auth.authorization_id}/void`, { reason: e.message }).catch(() => {});
-        return { failed: true };
-      }
-    }
-    if (offer.provider === 'liteapi') {
-      say('book', `Reserviere den Preis für ${offer.title} bei LiteAPI (Sandbox) …`);
-      try {
+        if (stopped(r)) return { blocked: true };
+        candidate = { ...offer, amount: fresh.amount, currency: fresh.total_currency, flight: fresh };
+        termsChanged = !isDeepStrictEqual(contract(toAuthorization(r.mandate, offer)), contract(toAuthorization(r.mandate, candidate)));
+        book = () => duffel.book(fresh, auth.authorization_id);
+        label = fresh.demo ? 'Demo-Anbieter' : 'Duffel-Test';
+      } else if (offer.provider === 'liteapi') {
+        say('book', `Prüfe den Preis für ${offer.title} bei LiteAPI (Sandbox) erneut …`);
         const pre = await liteapi.prebook(offer);
-        if (Math.abs(pre.amount - offer.amount) > Math.max(0.5, offer.amount * 0.005) || pre.cancellable !== offer.cancellable) {
-          say('warn', `LiteAPI meldet neue Bedingungen: ${offer.currency} ${offer.amount} → ${pre.currency} ${pre.amount}${pre.cancellable !== offer.cancellable ? ', Storno geändert' : ''}. Ich frage die Leine neu.`);
-          await leash('POST', `/v1/authorizations/${auth.authorization_id}/void`, { reason: 'Preis oder Bedingungen vor Buchung geändert' });
-          const fresh = { ...offer, amount: pre.amount, currency: pre.currency, cancellable: pre.cancellable, items: offer.items.map((it, i) => (i === 0 ? { ...it, unit_price: pre.amount, currency: pre.currency } : it)) };
-          return { requote: fresh, related: auth.authorization_id };
-        }
-        const b = await liteapi.book(pre.prebookId, offer.travelers, auth.authorization_id);
-        await leash('POST', `/v1/authorizations/${auth.authorization_id}/booked`, b);
-        say('booked', `Gebucht: ${offer.title} · Bestätigung ${b.booking_reference} (LiteAPI Sandbox)`, { authorization_id: auth.authorization_id, booking: b });
-        r.booked?.add(offer.kind);
-        return { booked: true, booking: b };
-      } catch (e) {
-        say('warn', `Hotelbuchung fehlgeschlagen: ${e.message}. Budget wird wieder freigegeben.`);
-        await leash('POST', `/v1/authorizations/${auth.authorization_id}/void`, { reason: e.message }).catch(() => {});
-        return { failed: true };
+        if (stopped(r)) return { blocked: true };
+        termsChanged = pre.amount !== offer.amount || pre.currency !== offer.currency || pre.cancellable !== offer.cancellable || pre.cancellationChanged === true;
+        if (termsChanged) candidate = { ...offer, amount: pre.amount, currency: pre.currency, cancellable: pre.cancellable, items: offer.items.map((item, i) => i === 0 ? { ...item, unit_price: pre.amount, currency: pre.currency } : item) };
+        book = () => liteapi.book(pre.prebookId, offer.travelers, auth.authorization_id);
+        label = 'LiteAPI Sandbox';
+      } else {
+        book = async () => ({ provider: 'demo', booking_reference: `TRV-${Math.random().toString(36).slice(2, 7).toUpperCase()}`, demo: true });
+        label = 'Demo-Anbieter';
       }
+      if (termsChanged) {
+        say('warn', `Preis, Währung oder Bedingungen haben sich geändert. Ich frage die Leine neu.`);
+        // No booking has been submitted: this old quote can safely release its budget.
+        await leash('POST', `/v1/authorizations/${auth.authorization_id}/void`, { reason: 'Preis oder Bedingungen vor Buchung geändert; noch keine Buchung übermittelt.' });
+        return { requote: candidate, related: auth.authorization_id };
+      }
+      if (!await executionAllowed(r, candidate, auth) || stopped(r)) return { blocked: true };
+      submitted = true;
+      const b = await book();
+      await leash('POST', `/v1/authorizations/${auth.authorization_id}/booked`, b);
+      say('booked', `Gebucht: ${offer.title} · Bestätigung ${b.booking_reference} (${label})`, { authorization_id: auth.authorization_id, booking: b });
+      r.booked?.add(offer.kind);
+      return { booked: true, booking: b };
+    } catch (e) {
+      r.stopped = true;
+      if (submitted) {
+        r.uncertain ??= new Set(); r.uncertain.add(auth.authorization_id);
+        say('warn', `Buchungsausgang oder Speicherung unbekannt: ${e.message}. Budget bleibt gebunden. Keine automatische Wiederholung; Anbieterstatus manuell abgleichen.`, { authorization_id: auth.authorization_id, booking_unknown: true });
+        return { unknown: true };
+      }
+      say('warn', `Vor der Buchung gestoppt: ${e.message}. Keine Buchung übermittelt; die bisherige Budgetbindung bleibt bis zur Klärung bestehen.`, { authorization_id: auth.authorization_id });
+      return { blocked: true };
     }
-    const b = { provider: 'demo', booking_reference: `TRV-${Math.random().toString(36).slice(2, 7).toUpperCase()}`, demo: true };
-    await leash('POST', `/v1/authorizations/${auth.authorization_id}/booked`, b);
-    say('booked', `Gebucht: ${offer.title} · Bestätigung ${b.booking_reference} (Demo-Anbieter)`, { authorization_id: auth.authorization_id, booking: b });
-    r.booked?.add(offer.kind);
-    return { booked: true, booking: b };
   }
 
   // Propose one offer; returns 'approved' | 'declined' | 'pending' plus the decision.
@@ -275,7 +318,7 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
   }
 
   return {
-    state() { return run ? { running: !run.done && !run.stopped, id: run.id, mandate_id: run.mandate.mandate_id, mode: run.mode, waiting: [...run.waiting.keys()], done: !!run.done, stopped: !!run.stopped } : { running: false }; },
+    state() { return run ? { running: !run.done && !run.stopped, id: run.id, mandate_id: run.mandate.mandate_id, mode: run.mode, waiting: [...run.waiting.keys()], uncertain: [...(run.uncertain ?? [])], done: !!run.done, stopped: !!run.stopped } : { running: false }; },
     async start(mandateId, { mode = 'script' } = {}) {
       if (run && !run.done && !run.stopped) throw new Error('Der Agent läuft schon.');
       const mandate = await leash('GET', `/v1/mandates/${mandateId}`);

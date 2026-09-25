@@ -39,7 +39,7 @@ export function createLeashService({ store, customerKey, agentKey }) {
     ['POST', /^\/v1\/mandates\/([^/]+)\/resume$/, ['customer'], ([id]) => store.setStatus(id, 'active')],
     ['DELETE', /^\/v1\/mandates\/([^/]+)$/, ['customer'], ([id]) => store.setStatus(id, 'revoked')],
     ['GET', /^\/v1\/mandates\/([^/]+)\/summary$/, ['customer', 'agent'], ([id]) => store.summary(id)],
-    ['POST', /^\/v1\/authorizations$/, ['agent'], (m, b) => store.authorize(b)],
+    ['POST', /^\/v1\/authorizations$/, ['agent'], (m, b) => store.authorizeChecked(b)],
     ['GET', /^\/v1\/authorizations$/, ['customer'], (m, b, url) => store.list(url.searchParams.get('mandate_id'))],
     ['GET', /^\/v1\/authorizations\/([^/]+)$/, ['customer', 'agent'], ([id]) => store.get(id) ?? (() => { throw new PolicyError('Nicht gefunden', 404); })()],
     ['POST', /^\/v1\/authorizations\/([^/]+)\/resolve$/, ['customer'], ([id], b) => store.resolve(id, b)],
@@ -52,6 +52,7 @@ export function createLeashService({ store, customerKey, agentKey }) {
   async function handle(req, res) {
     const url = new URL(req.url, 'http://leash.local');
     try {
+      store.ensureDurable();
       if (req.method === 'GET' && url.pathname === '/v1/stream') {
         if (roleOf(req) !== 'customer') throw new PolicyError('Nicht berechtigt', 401);
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });

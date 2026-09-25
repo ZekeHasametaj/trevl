@@ -189,6 +189,11 @@ details.assume ul { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); f
 .say.k-done { background: var(--ok-bg); color: #0B5C40; }
 .say.k-stop { background: var(--no-bg); color: #8E2419; }
 .say.k-ai { background: #ECEBFF; color: #2B2A6B; }
+.say.k-semantic { background: #ECEBFF; color: #38356D; font-size: 12.5px; overflow-wrap: anywhere; }
+.say.k-semantic p { margin: 5px 0 0; line-height: 1.45; }
+.say.k-semantic.unknown { background: var(--ask-bg); color: #7A4E0F; }
+.say.k-semantic.fail { background: var(--no-bg); color: #8E2419; }
+.semantic-reference { display: block; margin-top: 5px; color: var(--muted); font-size: 10.5px; font-family: var(--mono); }
 .ai-tag { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; font-weight: 700; color: #4B45C6; background: #FFFFFF; border-radius: 6px; padding: 1px 6px; margin-right: 4px; vertical-align: 1px; }
 .side .sbtn.on { background: #FF8F74; color: #1A1D24; }
 .say .when { color: var(--muted); font-size: 11px; margin-left: 6px; }
@@ -308,6 +313,14 @@ details.assume ul { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); f
 .check .s.unknown { background: var(--ask-bg); color: var(--ask); }
 .check b { font-size: 14px; }
 .check p { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.4; }
+.semantic-proof { padding: 13px 14px; background: #ECEBFF; color: #38356D; border-radius: 14px; overflow-wrap: anywhere; }
+.semantic-proof.unknown { background: var(--ask-bg); color: #7A4E0F; }
+.semantic-proof.fail { background: var(--no-bg); color: #8E2419; }
+.semantic-heading { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; }
+.semantic-heading svg { flex: none; margin-top: 2px; }
+.semantic-proof p { margin: 7px 0; font-size: 12.5px; line-height: 1.45; }
+.semantic-proof small { font-size: 11px; font-family: var(--mono); }
+.semantic-proof .semantic-limit { border-top: 1px solid #FFFFFF80; padding-top: 8px; margin-bottom: 0; font-size: 11.5px; font-weight: 600; }
 .signal { display: flex; gap: 10px; padding: 10px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4; margin-top: 8px; }
 .signal.block { background: var(--no-bg); color: #8E2419; }
 .signal.warn { background: var(--ask-bg); color: #7A4E0F; }

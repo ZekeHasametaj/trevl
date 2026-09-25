@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createLeashStore } from './store.js';
 import { createLeashService } from './service.js';
+import { pruefeText } from './vendor/jev-check.js';
 import { ENGINE_VERSION } from './evaluate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -23,7 +24,7 @@ const DATA_DIR = path.resolve(ROOT, process.env.DATA_DIR || 'data');
 const customerKey = process.env.LEASH_CUSTOMER_KEY || crypto.randomBytes(18).toString('hex');
 const agentKey = process.env.LEASH_AGENT_KEY || crypto.randomBytes(18).toString('hex');
 
-const store = createLeashStore({ file: path.join(DATA_DIR, 'leash-state.json'), familiarSeed: ['ME-HOTEL-MIRADOURO-DIRECT'] });
+const store = createLeashStore({ file: path.join(DATA_DIR, 'leash-state.json'), familiarSeed: ['ME-HOTEL-MIRADOURO-DIRECT'], textCheck: pruefeText });
 const service = createLeashService({ store, customerKey, agentKey });
 service.server().listen(PORT, HOST, () => {
   console.log(`Leine (Engine) http://${HOST}:${PORT}  ${ENGINE_VERSION}`);

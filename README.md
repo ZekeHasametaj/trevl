@@ -9,6 +9,10 @@ sichtbarer Unsicherheit.
 
 ## Starten
 
+**Integrationsbranch vom 25.09.:** Euer Original-Jev-Check ist jetzt in der Leash,
+inklusive Live-Spur und Warum-Ansicht. Vergleich, echte Testresultate, Start auf
+Port 4330 und offene Grenzen: [Jev-Integration und Review](docs/JEV-INTEGRATION-REVIEW.md).
+
 Voraussetzung: [Node.js](https://nodejs.org) ab Version 20 und Git.
 
 ```bash
@@ -26,7 +30,8 @@ Dann im Browser: <http://localhost:4320>. Das ist die volle Version: Flüge übe
 |---|---|---|
 | `npm run start:hotels` | <http://localhost:4320> (Leine: 4321) | Duffel-Flüge + **LiteAPI-Hotels** (Sandbox), Daten in `data-hotels/` |
 | `npm start` | <http://localhost:4310> (Leine: 4311) | Duffel-Flüge + Hotels/Transfers aus dem Testmarkt, Daten in `data/` |
-| `npm test` | – | 42 automatische Tests |
+| `npm test` | – | 72 automatische Tests + Prüfung des generierten Jev-Bausteins |
+| `npm run test:jev:live` | – | begrenzte echte Jev-Prüfung, synthetische Käufe, keine Buchungen |
 | `npm run smoke -- http://localhost:4320` | – | ganze Reise Ende-zu-Ende gegen einen laufenden Server (**setzt diese Instanz zurück**, bucht mit Schlüsseln echte Testbuchungen) |
 | `npm run viseca-replay` | – | Visecas 45 offizielle Testkäufe durch die Engine → `docs/viseca-replay.md` |
 | `npm run leash` | Port 4311 | nur die Leine (Engine), z. B. auf einem anderen Rechner |
@@ -70,8 +75,9 @@ Handy-App (web/)  ──HTTP, Kunden-Schlüssel──►  Leine / Entscheidungs-
 App-Server (server/main.js, Port 4310/4320) ── Reiseagent (server/app/agent.js) ── Duffel-Test / LiteAPI-Sandbox / Testmarkt
 ```
 
-- **Leine (Backend)** – `server/leash/`: eigener HTTP-Dienst, reine Regeln + Zustand, **keine KI im Entscheid**,
-  Antwort in wenigen Millisekunden. Speichert Leinen, Entscheidungen, Antworten und das Protokoll in `data/`.
+- **Leine (Backend)** – `server/leash/`: eigener HTTP-Dienst, feste Regeln + Zustand + **Original-Jev-Inhaltsprüfung**.
+  Das Modell ist auf 3 Sekunden begrenzt; harte Regeln bleiben verbindlich. Die konkrete Dauer steht am Ergebnis.
+  Speichert Leinen, Entscheidungen, Antworten und das Protokoll in `data/`.
 - **Übersetzer (Frontend)** – `server/app/compile.js`: macht aus dem Kundentext Regeln im Viseca-Regelformat
   (`field`, `operator`, `value`, `currency`, `scope`, `period_days`). Optional hilft Claude; jede Zahl und jedes
   Zitat der KI muss im Originaltext stehen, sonst wird es verworfen.

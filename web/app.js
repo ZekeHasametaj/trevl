@@ -64,6 +64,20 @@ function day(iso) { if (!iso) return '?'; const d = new Date(`${iso.slice(0, 10)
 function range(a, b) { if (!a) return '?'; if (!b || a === b) return day(a); const A = new Date(`${a}T12:00:00Z`), B = new Date(`${b}T12:00:00Z`); return A.getUTCMonth() === B.getUTCMonth() ? `${A.getUTCDate()}.–${B.getUTCDate()}. ${MO[B.getUTCMonth()]}` : `${day(a)} – ${day(b)}`; }
 const hhmm = (iso) => { const d = new Date(iso); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
+// A semantic result describes content only; it never grants purchase permission.
+function semanticResult(check) {
+  const latency = Number.isFinite(check.latency_ms) && check.latency_ms >= 0 ? `${Math.round(check.latency_ms)} ms` : '';
+  if (check.quelle !== 'jev') return { tone: 'unknown', label: 'Ersatzantwort · keine bestätigte Jev-Prüfung', detail: 'Die Jev-Inhaltsprüfung ist nicht bestätigt. Diese Antwort ist keine positive Prüfung.', latency };
+  if (check.passung === 'passt') return { tone: 'pass', label: 'Jev: Inhalt passt zum Auftrag', detail: 'Der Inhalt passt. Ob die Buchung erlaubt ist, entscheidet weiterhin die Leine anhand deiner Regeln.', latency };
+  if (check.passung === 'widerspricht') return { tone: 'fail', label: 'Jev: Inhalt widerspricht dem Auftrag', detail: 'Die Inhaltsprüfung meldet einen Widerspruch. Die endgültige Entscheidung und ihre Gründe werden separat ausgewiesen.', latency };
+  return { tone: 'unknown', label: 'Jev: Inhalt noch unklar', detail: 'Die Inhaltsprüfung konnte die Passung nicht bestätigen. Die Leine berücksichtigt deine Regel für Unklarheiten.', latency };
+}
+function semanticEvidence(check) {
+  if (!check) return '';
+  const result = semanticResult(check), version = Number.isSafeInteger(check.mandate_version) && check.mandate_version > 0 ? `Leine v${check.mandate_version}` : '';
+  return `<div class="section-title"><span class="h3">Jev-Inhaltsprüfung</span></div><div class="semantic-proof ${result.tone}"><div class="semantic-heading">${(result.tone === 'pass' ? I.check : result.tone === 'fail' ? I.x : I.q)(15)}<b>${result.label}</b></div><p>${result.detail}</p><small>${[check.quelle === 'jev' ? 'Quelle: Jev' : 'Quelle: Ersatz', version, result.latency].filter(Boolean).join(' · ')}</small><p class="semantic-limit">Eine positive Inhaltsprüfung ist keine Zahlungsfreigabe.</p></div>`;
+}
+
 // ---------------------------------------------------------------- state + api
 const S = {
   config: {}, view: 'welcome', text: '', answers: {}, draft: null, unc: null, compiling: false,
@@ -248,6 +262,8 @@ function agentBar() {
   let label, btn = '';
   if (m.status === 'revoked') label = 'Gestoppt – Leine gekappt';
   else if (m.status === 'paused') { label = 'Pausiert'; btn = `<button class="btn btn-ghost btn-sm" data-action="resume">${I.play(14)} Fortsetzen</button>`; }
+  else if (a.uncertain?.length) label = 'Gestoppt – Buchungsausgang klären';
+  else if (a.stopped) { label = 'Angehalten'; btn = `<button class="btn btn-ghost btn-sm" data-action="agent-start">${I.play(14)} Erneut suchen</button>`; }
   else if (a.running) { label = waiting ? `Wartet auf dich (${waiting})` : 'Arbeitet …'; btn = `<button class="btn btn-ghost btn-sm" data-action="agent-stop">${I.pause(14)} Anhalten</button>`; }
   else { label = a.done ? 'Fertig' : 'Bereit'; btn = `<button class="btn btn-primary btn-sm" data-action="agent-start">${I.play(14)} ${a.done ? 'Nochmals suchen' : 'Agent starten'}</button>`; }
   return `<div class="agent-bar"><div class="who"><span class="avatar">${I.spark(15)}</span><div>Reiseagent<div class="small">${esc(label)}</div></div></div><span class="spacer"></span>${btn}</div>`;
@@ -277,6 +293,11 @@ function feedItem(e) {
     return `<div class="say k-${esc(e.kind)}"${anim}>${esc(e.text)}</div>`;
   }
   if (e.src === 'leash') {
+    if (e.type === 'authorization.semantic.started') return `<div class="say k-semantic"${anim}><span class="ai-tag">${I.spark(11)} Jev</span> Inhaltsprüfung gestartet.<small class="semantic-reference">Anfrage ${esc(e.authorization_id)}</small></div>`;
+    if (e.type === 'authorization.semantic.completed') {
+      const result = semanticResult(e);
+      return `<div class="say k-semantic ${result.tone}"${anim}><strong>${result.label}</strong><p>${result.detail}</p><small class="semantic-reference">Anfrage ${esc(e.authorization_id)}${result.latency ? ` · ${result.latency}` : ''}</small></div>`;
+    }
     if (e.type === 'authorization.decided') return decisionCard(e.authorization_id, e, anim);
     if (e.type === 'booking.confirmed') {
       const a = S.authMap[e.authorization_id];
@@ -431,6 +452,7 @@ function whySheet(id) {
       <div class="dsub">${(KIND_ICON[t.kind] ?? I.store)(12)} ${esc(t.title ?? au.purchase_description)} · ${esc(au.merchant?.merchant_name)}</div><div class="dsum">${esc(d.summary)}</div></div>
     ${pending ? `<div class="row" style="margin-top:12px">${countdownSvg(d.step_up?.expires_at)}<button class="btn btn-no" data-action="decline" data-id="${esc(id)}">Ablehnen</button><button class="btn btn-ok" data-action="approve" data-id="${esc(id)}">Freigeben</button></div>` : ''}
     ${res}
+    ${semanticEvidence(d.semantic_check)}
     ${d.uncertainty.length ? `<div class="section-title"><span class="h3">Was unklar ist</span></div><div class="uncertain"><ul>${d.uncertainty.map(u => `<li>${esc(u)}</li>`).join('')}</ul></div>` : ''}
     ${signals ? `<div class="section-title"><span class="h3">Warnsignale</span></div>${signals}` : ''}
     <div class="section-title"><span class="h3">Was erlaubt war</span><span class="small">${d.checks.filter(c => c.status === 'pass').length}/${d.checks.length} erfüllt</span></div>
@@ -496,7 +518,7 @@ const REQS = [
   ['Unsicherheit sichtbar', 'Gelbe Box + Rückfrage mit 120 s, danach sicher ablehnen'],
   ['Zustand über Zeit', 'Reisekasse, Retries, Doppelbuchungen, Re-Quotes'],
   ['Händlertext nicht vertrauenswürdig', 'Injection erkannt, Regeln unverändert'],
-  ['Entkoppelt, schnell, vorhersagbar', 'Eigene Engine, < 10 ms, keine KI im Entscheid'],
+  ['Regelkern + Inhaltsprüfung', 'Feste Regeln + echte Jev-Prüfung (Timeout 3 s). Die Leine entscheidet; gemessene Prüfzeiten stehen am Ergebnis.'],
 ];
 function renderSides() {
   const left = $('#regie'), right = $('#wire');
@@ -508,12 +530,12 @@ function renderSides() {
       <div class="row" style="gap:8px"><button class="sbtn ${c.agent_mode === 'script' ? 'on' : ''}" data-action="agent-mode" data-v="script">Skript-Agent</button><button class="sbtn ${c.agent_mode === 'ai' ? 'on' : ''}" data-action="agent-mode" data-v="ai" ${c.ai_ready ? '' : 'title="Anthropic-Schlüssel fehlt"'}>${I.spark(12)} KI-Agent (Claude)</button></div>${c.ai_ready ? '' : '<p class="sub" style="margin-top:8px">KI braucht ANTHROPIC_API_KEY in .env.</p>'}</div>` : ''}
     <div class="blk"><div class="range">Tempo Agent <input type="range" min="0.2" max="2" step="0.1" value="${c.pace ?? 1}" data-input="pace"> <span class="kbd">${(c.pace ?? 1).toFixed(1)}×</span></div>
     <div class="row" style="margin-top:10px;gap:8px"><button class="sbtn red" data-action="reset">${I.refresh(13)} Alles zurücksetzen</button></div></div>
-    ${c.viseca ? `<div class="blk"><h3>Viseca-Testfälle</h3><p class="sub">Dieselbe Leine auf Visecas 5 öffentlichen Szenarien (45 Käufe, Originaldaten). Keine Sonderregeln.</p><button class="attack" data-action="viseca"><span class="n">45</span>Alle offiziellen Testkäufe prüfen</button></div>` : ''}
+    ${c.viseca ? `<div class="blk"><h3>Lokaler Viseca-Regeltest</h3><p class="sub">45 lokale Regelkern-Replays aus 5 öffentlichen Szenarien mit vorab erfassten Kundenregeln. Kein Live-Simulator und kein Jev-Test.</p><button class="attack" data-action="viseca"><span class="n">45</span>Lokale Regelkern-Replays ausführen</button></div>` : ''}
     <div class="blk"><h3>Viseca-Challenge → trevl</h3><div class="req-list" style="margin-top:10px">${REQS.map(([a, b]) => `<div>${I.check(14)}<span><b>${a}</b><br>${b}</span></div>`).join('')}</div></div>`;
   const calls = S.wire.filter(w => w.method !== 'GET').slice(-40).reverse();
   right.innerHTML = `<h3>Unter der Haube</h3><p class="sub">Die App entscheidet nichts. Sie fragt die Leine über HTTP – wie später die Viseca-one-App.</p>
     <div class="arch"><div class="box"><b>trevl App</b><span>Handy-UI · Übersetzer${c.llm ? ' + Claude' : ' (Regel-Parser)'}</span></div><div class="arrow">↓ HTTP · Kunden-Schlüssel</div>
-    <div class="box" style="border-color:#FF8F74"><b>Leine · Entscheidungs-Engine</b><span>${esc(c.engine_version ?? '')} · eigener Dienst ${esc((c.engine ?? '').replace('http://', ''))}</span><span>Regeln + Zustand · keine KI im Entscheid</span></div><div class="arrow">↑ HTTP · Agent-Schlüssel (nur anfragen)</div>
+    <div class="box" style="border-color:#FF8F74"><b>Leine · Entscheidungs-Engine</b><span>${esc(c.engine_version ?? '')} · eigener Dienst ${esc((c.engine ?? '').replace('http://', ''))}</span><span>Feste Regeln + Zustand + Jev-Inhaltsprüfung (Timeout 3 s). Die Leine trifft die endgültige Entscheidung.</span></div><div class="arrow">↑ HTTP · Agent-Schlüssel (nur anfragen)</div>
     <div class="box"><b>Reiseagent</b><span>${esc(c.duffel_label ?? '')} · ${esc(c.hotels_label ?? 'Hotels/Transfers: Testmarkt')}</span></div></div>
     <div class="blk"><h3>Live-Aufrufe</h3><p class="sub">Klick zeigt Anfrage und Antwort im Rohformat (Viseca-ähnliches Schema).</p>
     ${calls.map(w => { const dec = typeof w.response?.decision === 'string' ? w.response.decision : null; return `<details class="call"><summary><span class="m">${esc(w.method)}</span><span>${esc(w.path.replace('/v1', ''))}<span class="role ${w.role === 'customer' ? '' : 'agent'}">${w.role === 'customer' ? 'App' : 'Agent'}</span></span><span>${dec ? `<span class="dec ${dec}">${dec}</span> ` : ''}<span class="st ${w.status >= 400 ? 'err' : ''}">${w.status}</span></span></summary><pre>${esc(JSON.stringify({ request: w.request, response: w.response }, null, 2).slice(0, 6000))}</pre></details>`; }).join('') || '<p class="sub">Noch keine Aufrufe.</p>'}</div>`;
@@ -662,9 +684,10 @@ function showViseca(r) {
   el.id = 'overlay';
   el.className = 'overlay';
   const table = (sc) => sc.rows.map(x => `<tr><td class="num">${x.order}</td><td>${esc(x.merchant)}<small>${esc(x.items)}</small></td><td class="num">${money(x.amount, x.currency)}</td><td><span class="dec-chip ${D[x.decision]}">${x.decision}</span></td><td>${esc(x.summary)}</td></tr>`).join('');
-  el.innerHTML = `<div class="ov-box"><div class="ov-head"><div><div class="eyebrow">Viseca · öffentliche Szenarien · Originaldaten</div>
-      <div class="h2">${r.count} Testkäufe durch dieselbe Leine</div>
-      <p class="small">${r.totals.approve} × approve · ${r.totals.decline} × decline · ${r.totals.step_up} × step_up · langsamster Entscheid ${r.max_latency_ms.toFixed(1)} ms · alle zusammen ${r.total_ms} ms. Viseca liefert keine Musterlösung – jede Zeile ist begründet.</p></div>
+  el.innerHTML = `<div class="ov-box"><div class="ov-head"><div><div class="eyebrow">Viseca-Daten · lokaler Regelkern-Test</div>
+      <div class="h2">${r.count} lokale Regelkern-Replays</div>
+      <p class="small">Vorab erfasste Kundenregeln, kein Live-Simulator und kein Jev-Test. Jede Zeile zeigt die Begründung des Regelkerns.</p>
+      <p class="small">${r.totals.approve} × approve · ${r.totals.decline} × decline · ${r.totals.step_up} × step_up · langsamster Regelkern-Entscheid ${r.max_latency_ms.toFixed(1)} ms · lokale Replays zusammen ${r.total_ms} ms. Diese Zeiten enthalten keine Jev-Aufrufe.</p></div>
       <button class="btn btn-ghost btn-sm" data-action="close-overlay">Schliessen</button></div>
     ${r.scenarios.map(sc => `<section class="ov-sc"><div class="h3">${esc(sc.id)} · ${esc(sc.name)}</div><div class="ov-instr">«${esc(sc.instruction)}»</div>
       <div class="small">Regeln: ${sc.rules.map(esc).join(' · ')} · bei Unsicherheit fragen · ${sc.familiar_shops} bekannte Shops, ${sc.familiar_devices} bekannte Geräte aus dem Verlauf</div>
@@ -696,6 +719,7 @@ function connect() {
     if (e.type === 'system.reset') { S.feed = []; S.seen.clear(); softRefresh(); return; }
     S.feed.push(e);
     if (e.src === 'leash') {
+      if ((e.type === 'authorization.semantic.started' || e.type === 'authorization.semantic.completed') && S.view === 'trip') render();
       softRefresh();
       if (e.type === 'authorization.decided' && e.decision === 'step_up') setTimeout(() => showPush(e.authorization_id), 350);
       if (e.type === 'authorization.resolved' && S.sheet === `why:${e.authorization_id}`) setTimeout(() => whySheet(e.authorization_id), 200);

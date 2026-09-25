@@ -2,40 +2,60 @@
 // Persisted to a JSON file so a restart keeps approvals, pending questions and the audit trail.
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { evaluate, KIND_LABEL } from './evaluate.js';
+import { semanticInput, normalizeSemantic, withSemantic } from './semantic.js';
 import { validateMandateInput, diffMandate, PolicyError, UNC_LABEL } from './policy.js';
 import { DEFAULT_REGISTRY } from './merchants.js';
-import { uid, nowIso, round2, fmtMoney } from './util.js';
+import { uid, nowIso, round2, fmtMoney, toChf } from './util.js';
 
 const FINAL = new Set(['approved', 'declined', 'expired', 'cancelled', 'voided', 'superseded']);
+
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])]));
+  return value;
+}
+const fingerprint = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+
+function validateAuthorization(auth) {
+  if (!auth || typeof auth.authorization_id !== 'string' || !auth.authorization_id) throw new PolicyError('authorization_id fehlt');
+  if (typeof auth.amount !== 'number' || !Number.isFinite(auth.amount) || auth.amount < 0) throw new PolicyError('amount muss eine Zahl ≥ 0 sein');
+  if (typeof auth.currency !== 'string') throw new PolicyError('currency fehlt');
+  if (auth.billing_amount_chf != null && (typeof auth.billing_amount_chf !== 'number' || !Number.isFinite(auth.billing_amount_chf) || auth.billing_amount_chf < 0)) throw new PolicyError('billing_amount_chf ist ungültig');
+  if (auth.items != null && (!Array.isArray(auth.items) || auth.items.some(i => !i || typeof i !== 'object'))) throw new PolicyError('items ist ungültig');
+}
 
 function emptyState() {
   return { drafts: {}, mandates: {}, ledger: [], auths: {}, events: [], seq: 0 };
 }
 
-export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, familiarSeed = [], familiarMerchantsSeed = [], familiarDevicesSeed = [], clock = () => Date.now(), stepUpSeconds = 120, velocityMax = 12 } = {}) {
+export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, familiarSeed = [], familiarMerchantsSeed = [], familiarDevicesSeed = [], clock = () => Date.now(), stepUpSeconds = 120, velocityMax = 12, textCheck = null } = {}) {
   let state = emptyState();
   if (file && fs.existsSync(file)) {
-    try { state = { ...emptyState(), ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch { /* corrupt file: start clean */ }
+    // Never erase spend/approvals by silently starting clean after corrupted state.
+    state = { ...emptyState(), ...JSON.parse(fs.readFileSync(file, 'utf8')) };
   }
+  const inFlight = new Map();
   const listeners = new Set();
-  let saveTimer = null;
-  const persist = () => {
-    if (!file) return;
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(flush, 150);
-  };
+  let persistenceFailed = false;
   function flush() {
     if (!file) return;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file + '.tmp', JSON.stringify(state));
-    fs.renameSync(file + '.tmp', file);
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file + '.tmp', JSON.stringify(state));
+      fs.renameSync(file + '.tmp', file);
+      persistenceFailed = false;
+    } catch (error) { persistenceFailed = true; throw error; }
   }
+  function ensureDurable() { if (persistenceFailed) flush(); }
   function emit(type, data = {}) {
     const ev = { seq: ++state.seq, type, at: nowIso(), ...data };
     state.events.push(ev);
     if (state.events.length > 3000) state.events.splice(0, state.events.length - 3000);
-    persist();
+    // Persist before publishing events or returning an approval. On write failure
+    // reads/retries stay blocked until the complete state can be saved again.
+    flush();
     for (const l of listeners) { try { l(ev); } catch { /* listener errors never break the engine */ } }
     return ev;
   }
@@ -52,6 +72,7 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
   }
 
   function publicAuth(id) {
+    ensureDurable();
     const a = state.auths[id];
     if (!a) return null;
     return { authorization_id: id, status: a.status, decision: a.decision, resolution: a.resolution, booking: a.booking, authorization: a.auth, created_at: a.created_at };
@@ -61,6 +82,7 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
     subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     events(since = 0) { return state.events.filter(e => e.seq > since); },
     flush,
+    ensureDurable,
 
     createDraft(body) {
       const input = validateMandateInput(body);
@@ -123,18 +145,66 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
       return m;
     },
 
-    authorize(auth) {
-      if (!auth || typeof auth.authorization_id !== 'string' || !auth.authorization_id) throw new PolicyError('authorization_id fehlt');
-      if (typeof auth.amount !== 'number' || !Number.isFinite(auth.amount) || auth.amount < 0) throw new PolicyError('amount muss eine Zahl ≥ 0 sein');
-      if (typeof auth.currency !== 'string') throw new PolicyError('currency fehlt');
+    // HTTP requests enter here. Synchronous authorize remains available for the
+    // explicitly deterministic offline replay; it is never an HTTP bypass.
+    async authorizeChecked(input) {
+      validateAuthorization(input);
+      // Agent-provided conversion is not issuer evidence. The public agent API
+      // may only use the engine's configured rate; local issuer CSV replay uses
+      // authorize() directly with its separately sourced billing context.
+      if (input.billing_amount_chf != null) {
+        const expected = toChf(input.amount, input.currency);
+        if (expected == null || Math.abs(expected - input.billing_amount_chf) > 1e-9) {
+          throw new PolicyError('billing_amount_chf widerspricht dem Betrag und dem hinterlegten Wechselkurs. Der Agent darf den Abrechnungsbetrag nicht selbst festlegen.', 400);
+        }
+      }
+      const auth = structuredClone(input);
+      const hash = fingerprint(auth);
+      const existing = state.auths[auth.authorization_id];
+      if (existing) return api.authorize(auth);
+      const pending = inFlight.get(auth.authorization_id);
+      if (pending) {
+        if (pending.hash !== hash) throw new PolicyError('Diese ID gehört zu anderen Kaufdaten. Neue Anfrage-ID erforderlich.', 409);
+        return pending.promise;
+      }
+      const promise = (async () => {
+        const mandate = state.mandates[auth.mandate_id] ?? null;
+        const precheck = evaluate({ auth, mandate, ledger: state.ledger, ...context(), now: clock() });
+        if (!textCheck || precheck.decision === 'decline') return api.authorize(auth);
+        const input = semanticInput(mandate, auth);
+        if (!input) return api.authorize(auth);
+        const version = mandate.version;
+        emit('authorization.semantic.started', { authorization_id: auth.authorization_id, mandate_id: auth.mandate_id });
+        const start = performance.now();
+        let result;
+        try { result = normalizeSemantic(await textCheck(input)); }
+        catch { result = { passung: 'unklar', quelle: 'ersatz' }; }
+        const current = state.mandates[auth.mandate_id];
+        // A response for an older policy cannot approve a newly changed policy.
+        if (!current || current.version !== version) result = { passung: 'unklar', quelle: 'ersatz' };
+        const assessment = { ...result, latency_ms: Math.round((performance.now() - start) * 100) / 100,
+          mandate_version: version, input_hash: fingerprint(input) };
+        emit('authorization.semantic.completed', { authorization_id: auth.authorization_id, ...assessment });
+        // Fresh budget, status and rule evaluation occurs synchronously at commit,
+        // after Jev. Concurrent purchases cannot spend the same available budget.
+        return api.authorize(auth, assessment);
+      })();
+      inFlight.set(auth.authorization_id, { hash, promise });
+      try { return await promise; } finally { inFlight.delete(auth.authorization_id); }
+    },
+
+    authorize(input, assessment = null) {
+      validateAuthorization(input);
+      const auth = structuredClone(input);
       // Repeated delivery: answer with the stored result, never count twice.
       const existing = state.auths[auth.authorization_id];
       if (existing) {
+        if (fingerprint(existing.auth) !== fingerprint(auth)) throw new PolicyError('Diese ID gehört zu anderen Kaufdaten. Neue Anfrage-ID erforderlich.', 409);
         emit('authorization.replayed', { authorization_id: auth.authorization_id, status: existing.status });
         return { ...existing.decision, status: existing.status, replay: true, resolution: existing.resolution };
       }
       const mandate = state.mandates[auth.mandate_id] ?? null;
-      const decision = evaluate({ auth, mandate, ledger: state.ledger, ...context(), now: clock() });
+      const decision = withSemantic(evaluate({ auth, mandate, ledger: state.ledger, ...context(), now: clock() }), assessment, mandate);
       const status = decision.decision === 'approve' ? 'approved' : decision.decision === 'decline' ? 'declined' : 'pending';
       const t = auth.travel ?? {};
       if (decision.decision === 'step_up') decision.step_up = { expires_at: new Date(clock() + stepUpSeconds * 1000).toISOString(), window_seconds: stepUpSeconds };
@@ -171,6 +241,9 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
       if (hard) {
         setFinal(id, 'declined', { by: 'leash', decision: 'decline', text: `Dein Ja kann keine harte Regel überstimmen: ${recheck.summary}`, recheck });
       } else {
+        if (a.decision.mandate_version !== mandate.version || (a.decision.semantic_check && a.decision.semantic_check.mandate_version !== mandate.version)) {
+          throw new PolicyError('Die Regeln wurden geändert. Bitte das Angebot unter den neuen Regeln erneut prüfen.', 409);
+        }
         setFinal(id, 'approved', { by: 'customer', decision: 'approve', text: body.customer_message || 'Du hast freigegeben.' });
       }
       return publicAuth(id);
@@ -181,6 +254,7 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
       const a = state.auths[id];
       if (!a) throw new PolicyError('Anfrage nicht gefunden', 404);
       if (a.status !== 'approved') throw new PolicyError('Nur freigegebene Käufe können storniert werden', 409);
+      if (a.booking) throw new PolicyError('Eine gemeldete Buchung braucht einen bestätigten Storno-/Erstattungsnachweis. Budget bleibt gebunden.', 409);
       setFinal(id, 'voided', { by: 'agent', text: reason || 'Buchung nicht ausgeführt.' });
       return publicAuth(id);
     },
@@ -210,6 +284,7 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
     },
 
     summary(mandateId) {
+      ensureDurable();
       const m = state.mandates[mandateId];
       if (!m) throw new PolicyError('Leine nicht gefunden', 404);
       const budgetRule = m.hard_rules.find(r => r.kind === 'budget_total') ?? m.hard_rules.find(r => r.field === 'authorization.billing_amount_chf' && r.scope === 'period');

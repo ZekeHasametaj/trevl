@@ -7,7 +7,7 @@ import { scanUntrusted, extractClaims, extractProductFacts } from './untrusted.j
 import { assessMerchant, DEFAULT_REGISTRY } from './merchants.js';
 import { UNC_LABEL } from './policy.js';
 
-export const ENGINE_VERSION = 'trevl-leash/1.0';
+export const ENGINE_VERSION = 'trevl-leash/1.1-jev';
 
 export const KIND_LABEL = { flight: 'Flug', hotel: 'Hotel', transfer: 'Transfer', activity: 'Aktivität' };
 export const ITEM_LABEL = {

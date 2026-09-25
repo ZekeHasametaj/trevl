@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createLeashStore } from './leash/store.js';
 import { createLeashService } from './leash/service.js';
+import { pruefeText } from './leash/vendor/jev-check.js';
 import { ENGINE_VERSION } from './leash/evaluate.js';
 import { parseIntent, buildDraft } from './app/compile.js';
 import { findPlace } from './app/geo.js';
@@ -41,7 +42,7 @@ const agentKey = process.env.LEASH_AGENT_KEY || crypto.randomBytes(18).toString(
 // 1. Leash engine (own port) unless an external one is configured.
 let leashUrl = process.env.LEASH_URL;
 if (!leashUrl) {
-  const store = createLeashStore({ file: path.join(DATA_DIR, 'leash-state.json'), familiarSeed: ['ME-HOTEL-MIRADOURO-DIRECT'] });
+  const store = createLeashStore({ file: path.join(DATA_DIR, 'leash-state.json'), familiarSeed: ['ME-HOTEL-MIRADOURO-DIRECT'], textCheck: pruefeText });
   const service = createLeashService({ store, customerKey, agentKey });
   service.server().listen(LEASH_PORT, '127.0.0.1', () => console.log(`  Leine (Engine)   http://127.0.0.1:${LEASH_PORT}  ${ENGINE_VERSION}`));
   setInterval(() => store.sweep(), 1000).unref();
@@ -331,7 +332,8 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`\n  trevl App        http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   console.log(`  Flüge            ${duffel.label}`);
-  console.log(`  Sprachmodell     ${llmAvailable() ? 'an (Claude)' : 'aus – Regel-Parser'}\n`);
+  console.log(`  Reiseübersetzung ${llmAvailable() ? 'Claude' : 'Regel-Parser'}`);
+  console.log(`  Leash-Inhalt      Original-Jev-Check (max. 3 s; Ausfall → Rückfrage/Ablehnung)\n`);
 });
 
 function loadEnv(file) {

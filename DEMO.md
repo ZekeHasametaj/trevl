@@ -21,7 +21,7 @@ Viseca will drei Dinge sehen. Sie sind unten mit ① ② ③ markiert.
 
 ### 1:00 – ① Normale Buchung, ohne Reibung (20 s)
 - Der Agent sucht Flüge bei Duffel (Testmodus, dauert ~10 s – dabei erzählen) → **Flug freigegeben** → echte Duffel-Testbuchung mit Buchungsnummer (Duffel Airways, kein echtes Geld).
-- Rechts «Unter der Haube»: `POST /authorizations` → `approve` in wenigen Millisekunden.
+- Rechts «Unter der Haube»: `POST /authorizations` → `approve` mit tatsächlicher Prüfdauer; Jev-Start und Ergebnis erscheinen in der Timeline.
 
 ### 1:20 – ② Manipulation und Unklarheit (60 s)
 - **Casa do Tejo** über «Stayf1nder Deals» → **abgelehnt**: versteckte Anweisung im Händlertext + gefälschte Seite. **Warum?** öffnen: durchgestrichener Händlertext, «ignoriert».
@@ -47,7 +47,7 @@ Viseca will drei Dinge sehen. Sie sind unten mit ① ② ③ markiert.
 > «Das ist nicht nur eine Reise-App. Die Leine entscheidet jeden Kauf – auch Visecas eigene Testfälle, ohne Sonderregeln.»
 
 ### Schlusssatz
-> «Der Agent darf laufen. Die Leine hält der Kunde. Für Viseca heisst das: eine Engine, die in Millisekunden entscheidet,
+> «Der Agent darf laufen. Die Leine hält der Kunde. Für Viseca heisst das: feste Regeln mit einer begrenzten Jev-Inhaltsprüfung,
 > jede Entscheidung erklärt und die in die one-App passt.»
 
 ---
@@ -62,5 +62,5 @@ Viseca will drei Dinge sehen. Sie sind unten mit ① ② ③ markiert.
 | Kontrolle behalten? | Bestätigen, Rückfrage, kürzen, lockern nur mit Face ID, pausieren, kappen. Der Agent hat keinen Schreibzugriff (403). |
 | Hart kodiert? | Nein. Die Engine kennt keine Szenarien. Knopf «Alle offiziellen Testkäufe prüfen»: Visecas 45 Käufe durch denselben Code (docs/viseca-replay.md). |
 | Rollierende Limits? | Reisekasse über die ganze Reise; echte rollierende Fenster mit `period_days` – z. B. Visecas «CHF 300 in 7 Tagen» (SCEN0001: Kauf 8 abgelehnt, Kauf 10 wieder frei). |
-| Was, wenn die KI ausfällt? | Die KI hilft nur beim Verstehen des Textes. Entschieden wird ohne KI, vorhersagbar, in Millisekunden. |
+| Was, wenn Jev ausfällt? | Nach spätestens 3 Sekunden kommt eine Ersatzantwort: Rückfrage oder Ablehnung, keine stillschweigende Freigabe. Harte Regeln bleiben verbindlich. |
 | Latenz? | Unter 10 ms pro Entscheid (sichtbar auf jeder Karte). Viseca verlangt 8 s. |
