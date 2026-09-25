@@ -154,7 +154,7 @@ export function parseIntent(text, today = new Date()) {
   const home = places.find(p => p.place.home);
   if (!intent.origin && !intent.origin_text && home) { intent.origin = home.place.city; intent.origin_quote = home.alias; }
   const dest = places.find(p => p.place.city !== intent.origin && !p.place.home);
-  if (dest) { intent.destination = dest.place.city; intent.destination_quote = t.match(new RegExp(dest.alias.replace(/[^\p{L} ]/gu, '.'), 'iu'))?.[0] ?? dest.alias; }
+  if (dest) { intent.destination = dest.place.city; intent.destination_quote = t.match(new RegExp(dest.alias.replace(/[^\p{L} ]/gu, '.').replace(/ +/g, '[\\s-]+'), 'iu'))?.[0] ?? dest.alias; }
 
   // Dates.
   let m;

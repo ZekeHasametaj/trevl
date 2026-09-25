@@ -93,6 +93,39 @@ test('a Swiss city without "ab" is the origin, not the destination', () => {
   assert.equal(d.trip.destination.iata, 'SKP');
 });
 
+test('Banja Luka airport is recognised in free text without worldwide lookup', () => {
+  for (const name of ['banja luka', 'Banja Luka', 'Banja  Luka', 'Banja-Luka', 'Banjaluka', 'Flughafen Banja Luka', 'Banja Luka Flughafen', 'BNX', 'bnx']) {
+    const text = `Ab Zürich nach ${name} 5.-8. Oktober, zwei Personen, Budget 900 CHF`;
+    const d = compileLocal(text, {}, today);
+    assert.equal(d.ready, true, name);
+    assert.equal(d.trip.origin.iata, 'ZRH', name);
+    assert.equal(d.trip.destination.iata, 'BNX', name);
+    assert.equal(d.trip.destination.country, 'BA', name);
+    assert.ok(rule(d, 'destination').value.includes('BNX'), name);
+    assert.ok(text.includes(rule(d, 'destination').source.quote), name);
+  }
+});
+
+test('Banja Luka can also be the origin; partial city names are not accepted', () => {
+  const d = compileLocal('Ab Banja Luka nach Paris 5.-8. Oktober, Budget 900 CHF', {}, today);
+  assert.equal(d.trip.origin.iata, 'BNX');
+  assert.equal(d.trip.destination.iata, 'CDG');
+  const unknown = compileLocal('Banja Lukaville 5.-8. Oktober, Budget 900 CHF', {}, today);
+  assert.ok(unknown.missing.includes('destination'));
+});
+
+test('typed Banja Luka airport answers resolve locally without a provider', async () => {
+  const { findPlace } = await import('../server/app/geo.js');
+  let providerCalls = 0;
+  const duffel = { placeSuggestions: async () => { providerCalls++; return []; } };
+  for (const name of ['banja luka', 'Flughafen Banja Luka', 'Banja Luka Flughafen', 'Banja Luka Airport', 'Airport Banja Luka', 'Banja-Luka', 'Banja  Luka', 'BNX', 'bnx']) {
+    const result = await findPlace(name, duffel);
+    assert.equal(result?.place.iata, 'BNX', name);
+    assert.equal(result.place.source, 'list', name);
+  }
+  assert.equal(providerCalls, 0);
+});
+
 test('unknown towns are found through the airport search (stubbed), never words like Hotel or Oktober', async () => {
   const { findPlace, placeCandidates } = await import('../server/app/geo.js');
   const asked = [];

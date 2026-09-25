@@ -97,3 +97,21 @@ Testinstanz beendet. Die Hauptvorschau auf http://127.0.0.1:4330/ läuft mit dem
 neuen Stand. Der Anpassungsknopf wird auch für den bestehenden, abgeschlossenen
 Belgrad-Lauf angezeigt. Dessen historische Test-Transferbuchung und Ausgaben
 wurden erhalten; der alte Verlauf wird nicht nachträglich umgeschrieben.
+
+## Banja Luka / BNX erkennen
+
+Ursache des Nutzerfehlers: Banja Luka fehlte in der Ortsliste; die externe
+Kandidatensuche verkürzte kleingeschriebenes „banja luka“ auf „banja“. In dieser
+Vorschau ist Duffel zudem ausgeschaltet, sodass kein Flughafen-Fallback verfügbar
+ist. Banja Luka (BNX, BA; Quelle: https://bnx.aero/?lang=de) ist jetzt lokal
+hinterlegt, inklusive Banjaluka und BNX. Mehrere Leerzeichen und Bindestriche
+funktionieren; getippte Antworten mit „Flughafen“/„Airport“ vor oder nach einem
+bekannten Ort werden lokal aufgelöst. Das Originalzitat bleibt erhalten.
+
+Validierung: 115/115 Offline-Tests grün, darunter Freitext, Flughafen-Rückfragen
+ohne Provideraufruf, Abflug ab Banja Luka und Ausschluss ähnlicher Teilnamen.
+Browserprüfung auf 4330: „Ab Zürich nach banja luka …“ zeigt im Regel-Dialog
+„Banja Luka BNX · Bosnien und Herzegowina“ mit getrennten Preisgrenzen.
+Nur Entwurf geprüft, keine Regeln aktiviert und keine Buchung ausgelöst.
+Hauptvorschau neu gestartet, bestehende Daten erhalten. Flugangebote bleiben
+synthetisch; Erkennung eines Flughafens belegt keine reale Flugverfügbarkeit.

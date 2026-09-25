@@ -28,6 +28,7 @@ export const PLACES = [
   { city: 'skopje', name: 'Skopje', en: 'Skopje', iata: 'SKP', country: 'MK', aliases: ['skopje'] },
   { city: 'tirana', name: 'Tirana', en: 'Tirana', iata: 'TIA', country: 'AL', aliases: ['tirana', 'tiranë'] },
   { city: 'belgrade', name: 'Belgrad', en: 'Belgrade', iata: 'BEG', country: 'RS', aliases: ['belgrad', 'belgrade', 'beograd'] },
+  { city: 'banja_luka', name: 'Banja Luka', en: 'Banja Luka', iata: 'BNX', country: 'BA', aliases: ['banja luka', 'banjaluka', 'bnx'] },
   { city: 'sarajevo', name: 'Sarajevo', en: 'Sarajevo', iata: 'SJJ', country: 'BA', aliases: ['sarajevo'] },
   { city: 'podgorica', name: 'Podgorica', en: 'Podgorica', iata: 'TGD', country: 'ME', aliases: ['podgorica'] },
   { city: 'zagreb', name: 'Zagreb', en: 'Zagreb', iata: 'ZAG', country: 'HR', aliases: ['zagreb'] },
@@ -86,7 +87,7 @@ export const byIata = (i) => PLACES.find(p => p.iata === i) ?? null;
 
 // All place mentions in order of appearance.
 export function findPlaces(text) {
-  const f = ` ${fold(text).replace(/[^a-z0-9 ]/g, ' ')} `;
+  const f = ` ${fold(text).replace(/[^a-z0-9]+/g, ' ').trim()} `;
   const hits = [];
   for (const p of PLACES) {
     for (const a of p.aliases) {
@@ -99,6 +100,8 @@ export function findPlaces(text) {
 
 export function resolvePlace(name) {
   if (!name) return null;
-  const f = fold(name);
+  // Accept a typed airport label without sending known places to a provider.
+  const f = fold(name).replace(/[\s-]+/g, ' ').trim()
+    .replace(/^(?:flughafen|airport)\s+|\s+(?:flughafen|airport)$/g, '');
   return PLACES.find(p => p.aliases.some(a => fold(a) === f) || fold(p.en) === f || p.iata.toLowerCase() === f) ?? null;
 }
