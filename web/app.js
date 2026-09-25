@@ -82,7 +82,7 @@ function semanticEvidence(check) {
 const S = {
   config: {}, view: 'welcome', text: '', answers: {}, draft: null, unc: null, compiling: false,
   mandate: null, summary: null, auths: [], authMap: {}, agent: {}, feed: [], wire: [], seen: new Set(), attacks: [],
-  pushId: null, sheet: null, busy: false, compileRequest: 0,
+  pushId: null, sheet: null, busy: false, compileRequest: 0, adjustment: null, reviewError: null,
 };
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -213,7 +213,7 @@ function vCompose() {
       </div>
     </div>
     <p class="small search-help">${esc(S.config.duffel_label ?? 'Demo-Flüge')} · ${esc(S.config.hotels_label ?? 'Testmarkt')}. Jev prüft die Inhalte.</p>
-    ${S.mandate ? '<p class="small search-help">Dies ist ein neuer Auftrag. Erst deine Bestätigung ersetzt die bisherige Leine. Bestehende Buchungen bleiben erhalten; das neue Budget übernimmt bisherige Ausgaben nicht.</p>' : ''}
+    ${S.adjustment ? '<p class="small search-help">Du passt die bestehende Reise an. Bereits gebuchte Leistungen und Ausgaben bleiben erhalten; der Agent sucht nur die fehlenden Teile. Nach einer Buchung bleiben Ziel, Reisedaten und Reisende fest.</p>' : S.mandate ? '<p class="small search-help">Dies ist ein neuer Auftrag. Erst deine Bestätigung ersetzt die bisherige Leine. Bestehende Buchungen bleiben erhalten; das neue Budget übernimmt bisherige Ausgaben nicht.</p>' : ''}
     <div class="section-title"><span class="h3">Beispiele</span></div>
     <div class="chips">${EXAMPLES.map((e, i) => `<button class="chip example" data-action="example" data-i="${i}">${esc(e)}</button>`).join('')}</div>`;
 }
@@ -256,8 +256,9 @@ function vDraft() {
     </div>
     <div class="card" style="margin-top:10px"><details class="assume"><summary>Annahmen von trevl <span class="small">${(d.guidance ?? []).length}</span></summary><ul>${(d.guidance ?? []).map(g => `<li>${esc(g)}</li>`).join('')}</ul></details></div>
     <div class="sticky-cta">
-      ${S.mandate ? '<p class="small">Mit dem Start wird die alte Suche angehalten und ihre Leine ersetzt. Das Budget gilt für den neuen Auftrag; alte Buchungen bleiben bestehen.</p>' : ''}
-      <button class="btn btn-primary btn-block" data-action="confirm-draft" ${d.ready && !S.busy && !S.compiling ? '' : 'disabled'}>${I.lock(17)} ${S.busy ? 'Starte …' : S.compiling ? 'Prüfe Antwort …' : d.ready ? 'Regeln bestätigen und Suche starten' : 'Bitte offene Fragen beantworten'}</button>
+      ${S.reviewError ? `<p class="review-error" role="alert">${esc(S.reviewError)}</p>` : ''}
+      ${S.adjustment ? '<p class="small">Du bestätigst neue Werte für dieselbe Reise. Bereits Gebuchtes zählt weiter zum Budget und wird nicht erneut gebucht.</p>' : S.mandate ? '<p class="small">Mit dem Start wird die alte Suche angehalten und ihre Leine ersetzt. Das Budget gilt für den neuen Auftrag; alte Buchungen bleiben bestehen.</p>' : ''}
+      <button class="btn btn-primary btn-block" data-action="confirm-draft" ${d.ready && !S.busy && !S.compiling ? '' : 'disabled'}>${I.lock(17)} ${S.busy ? 'Starte …' : S.compiling ? 'Prüfe Antwort …' : d.ready ? S.adjustment ? 'Werte bestätigen und Suche fortsetzen' : 'Regeln bestätigen und Suche starten' : 'Bitte offene Fragen beantworten'}</button>
       <button class="btn btn-ghost btn-block review-edit" data-action="go-compose" ${S.busy ? 'disabled' : ''}>${I.back(15)} Text ändern / abbrechen</button>
     </div>`;
 }
@@ -278,10 +279,40 @@ function agentBar() {
   if (m.status === 'revoked') label = 'Gestoppt – Leine gekappt';
   else if (m.status === 'paused') { label = 'Pausiert'; btn = `<button class="btn btn-ghost btn-sm" data-action="resume">${I.play(14)} Fortsetzen</button>`; }
   else if (a.uncertain?.length) label = 'Gestoppt – Buchungsausgang klären';
+  else if (currentBlock()) label = `Gestoppt – kein ${currentBlock().category === 'flight' ? 'passender Flug' : 'passendes Hotel'}`;
   else if (a.stopped) { label = 'Angehalten'; btn = `<button class="btn btn-ghost btn-sm" data-action="agent-start">${I.play(14)} Erneut suchen</button>`; }
   else if (a.running) { label = waiting ? `Wartet auf dich (${waiting})` : 'Arbeitet …'; btn = `<button class="btn btn-ghost btn-sm" data-action="agent-stop">${I.pause(14)} Anhalten</button>`; }
   else { label = a.done ? 'Fertig' : 'Bereit'; btn = `<button class="btn btn-primary btn-sm" data-action="agent-start">${I.play(14)} ${a.done ? 'Nochmals suchen' : 'Agent starten'}</button>`; }
   return `<div class="agent-bar"><div class="who"><span class="avatar">${I.spark(15)}</span><div>Reiseagent<div class="small">${esc(label)}</div></div></div><span class="spacer"></span>${btn}</div>`;
+}
+function currentBlock() {
+  if (!S.mandate) return null;
+  if (S.agent.mandate_id === S.mandate.mandate_id) {
+    if (S.agent.blocked) return S.agent.blocked;
+    if (S.agent.running || S.agent.stopped || S.agent.uncertain?.length) return null;
+  }
+  // The persisted timeline retains the explanation after a server restart.
+  const last = S.feed.filter(e => e.src === 'agent' && e.mandate_id === S.mandate.mandate_id && ['agent.started', 'agent.blocked'].includes(e.type)).at(-1);
+  if (last?.type === 'agent.blocked') return last;
+  // Existing completed runs predate agent.blocked. Offer the same recovery if
+  // their required category has only rejections, without inventing a new stop event.
+  if (last?.type === 'agent.started' && S.feed.some(e => e.type === 'agent.finished' && e.run_id === last.run_id && !e.stopped)) {
+    for (const category of ['flight', 'hotel']) {
+      if (!S.mandate.trip?.kinds?.includes(category)) continue;
+      const attempts = S.auths.filter(a => a.authorization.travel?.kind === category && a.decision?.mandate_version === S.mandate.version);
+      if (attempts.length && attempts.every(a => ['declined', 'expired'].includes(a.status))) return {
+        category, reason: 'no_matching_offer', message: `Der bisherige Durchlauf hat ${category === 'flight' ? 'keinen passenden Flug' : 'kein passendes Hotel'} gebucht. Passe die Werte an, bevor du weitermachst.`,
+      };
+    }
+  }
+  return null;
+}
+function recoveryCard() {
+  const block = currentBlock();
+  if (!block || S.mandate?.status !== 'active') return '';
+  return `<div class="card recovery-card" role="status"><div class="h3">${block.category === 'flight' ? 'Kein passender Flug' : 'Kein passendes Hotel'}</div>
+    <p>${esc(block.message)}</p><p class="small">Passe zum Beispiel Preisgrenzen oder Wünsche an. Erst nach deiner Bestätigung geht es weiter.</p>
+    <button class="btn btn-primary btn-block" data-action="adjust-values">${I.leash(16)} Werte anpassen</button></div>`;
 }
 function vTrip() {
   const m = S.mandate;
@@ -298,7 +329,8 @@ function vTrip() {
     <div style="margin-top:10px">${kasseMini()}</div>
     ${m.status === 'revoked' ? `<div class="card" style="margin-top:10px;background:var(--no-bg)"><b>Leine gekappt.</b><p class="small" style="margin:4px 0 10px">Der Agent kann nichts mehr kaufen. Bereits Gebuchtes bleibt bestehen.</p><button class="btn btn-primary btn-sm" data-action="go-compose">${I.plus(14)} Neue Leine</button></div>` : ''}
     ${agentBar()}
-    <div class="feed">${items || `<div class="empty">Sobald der Agent sucht, siehst du hier jede Anfrage und jede Entscheidung der Leine.</div>`}</div>`;
+    <div class="feed">${items || `<div class="empty">Sobald der Agent sucht, siehst du hier jede Anfrage und jede Entscheidung der Leine.</div>`}</div>
+    ${recoveryCard()}`;
 }
 
 function feedItem(e) {
@@ -600,7 +632,14 @@ const A = {
   'new-search': () => {
     if (S.busy) return toast('Die Bestätigung läuft gerade.');
     S.compileRequest += 1;
-    Object.assign(S, { text: '', answers: {}, draft: null, unc: null, compiling: false, view: 'compose' });
+    Object.assign(S, { text: '', answers: {}, draft: null, unc: null, compiling: false, view: 'compose', adjustment: null, reviewError: null });
+    closeSheet(); render(); setTimeout(() => $('#text')?.focus(), 50);
+  },
+  'adjust-values': () => {
+    if (S.busy || !S.mandate || !currentBlock()) return;
+    S.compileRequest += 1;
+    Object.assign(S, { text: S.mandate.instruction, answers: {}, draft: null, unc: S.mandate.uncertainty_policy,
+      compiling: false, view: 'compose', reviewError: null, adjustment: { mandate_id: S.mandate.mandate_id, version: S.mandate.version } });
     closeSheet(); render(); setTimeout(() => $('#text')?.focus(), 50);
   },
   'open-search': () => {
@@ -616,7 +655,7 @@ const A = {
     if (S.compiling) return;
     S.text = $('#text')?.value ?? S.text;
     if (!S.text.trim()) return toast('Beschreib kurz deine Reise.');
-    S.answers = {}; S.unc = null; S.compiling = true; render();
+    S.answers = {}; S.unc = null; S.reviewError = null; S.compiling = true; render();
     const request = ++S.compileRequest, text = S.text;
     try {
       const draft = await api('POST', '/api/compile', { text, answers: S.answers });
@@ -639,20 +678,28 @@ const A = {
   'confirm-draft': async () => {
     const d = S.draft;
     if (!d?.ready || S.busy || S.compiling) return;
-    S.busy = true; render();
+    S.busy = true; S.reviewError = null; render();
     try {
       await faceId();
       await api('POST', '/api/agent/stop');
-      const draft = await api('POST', '/api/leash/mandates', { instruction: d.instruction, trip: d.trip, hard_rules: d.hard_rules, uncertainty_policy: S.unc ?? d.uncertainty_policy, guidance: d.guidance, open_questions: d.open_questions, valid_until: d.trip.start_date });
-      const m = await api('POST', `/api/leash/mandates/${draft.draft_id}/confirm`, { confirmed: true });
-      S.feed = []; S.seen.clear();
+      const input = { instruction: d.instruction, trip: d.trip, hard_rules: d.hard_rules, uncertainty_policy: S.unc ?? d.uncertainty_policy, guidance: d.guidance, open_questions: d.open_questions, valid_until: d.trip.start_date };
+      let m;
+      if (S.adjustment) {
+        const { mandate: current } = await api('GET', '/api/leash/mandates/active');
+        if (current?.mandate_id !== S.adjustment.mandate_id || current.version !== S.adjustment.version) throw new Error('Die Reise wurde inzwischen geändert. Öffne „Werte anpassen“ bitte erneut.');
+        ({ mandate: m } = await api('PATCH', `/api/leash/mandates/${current.mandate_id}`, { ...input, customer_confirmed: true }));
+      } else {
+        const draft = await api('POST', '/api/leash/mandates', input);
+        m = await api('POST', `/api/leash/mandates/${draft.draft_id}/confirm`, { confirmed: true });
+        S.feed = []; S.seen.clear();
+      }
       await refresh();
-      S.draft = null; S.text = ''; S.answers = {}; S.unc = null;
+      S.draft = null; S.text = ''; S.answers = {}; S.unc = null; S.adjustment = null;
       S.view = 'trip'; render.jump = true; render();
       toast('Leine aktiv. Der Agent legt los.');
       await api('POST', '/api/agent/start', { mandate_id: m.mandate_id });
       softRefresh();
-    } catch (e) { toast(e.message); }
+    } catch (e) { S.reviewError = e.message; toast(e.message); }
     finally { S.busy = false; render(); }
   },
   'agent-start': async () => { try { await api('POST', '/api/agent/start', { mandate_id: S.mandate.mandate_id }); softRefresh(); } catch (e) { toast(e.message); } },
@@ -817,7 +864,7 @@ function connect() {
       if (e.type === 'authorization.decided' && e.decision === 'step_up') setTimeout(() => showPush(e.authorization_id), 350);
       if (e.type === 'authorization.resolved' && S.sheet === `why:${e.authorization_id}`) setTimeout(() => whySheet(e.authorization_id), 200);
     } else if (e.src === 'agent') {
-      if (e.type === 'agent.started' || e.type === 'agent.finished') softRefresh();
+      if (['agent.started', 'agent.finished', 'agent.blocked'].includes(e.type)) softRefresh();
       else if (S.view === 'trip') render();
     } else if (S.view === 'compose' || S.view === 'draft') renderSides(); else render();
   };

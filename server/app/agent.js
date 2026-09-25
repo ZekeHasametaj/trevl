@@ -5,7 +5,7 @@ import { hotelOffers, transferOffers, activityOffers } from './market.js';
 import { uid } from '../leash/util.js';
 import { evaluate } from '../leash/evaluate.js';
 import { isDeepStrictEqual } from 'node:util';
-import { runAiAgent } from './ai-agent.js';
+import { runAiAgent, categoryDependency } from './ai-agent.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const ORDER = ['flight', 'hotel', 'transfer', 'activity'];
@@ -63,35 +63,41 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
     };
   }
 
-  async function search(mandate, kind) {
+  function ensureCategory(r, kind) {
+    if (stopped(r)) throw new Error('Der Agent wurde gestoppt.');
+    const dependency = categoryDependency(r, kind);
+    if (dependency) throw new Error(`Zuerst muss ${dependency === 'flight' ? 'der Flug' : 'das Hotel'} gebucht werden.`);
+    if (!(r.mandate.trip.kinds ?? ORDER).includes(kind)) throw new Error('Diese Kategorie gehört nicht zum Auftrag.');
+  }
+
+  function noMatchingOffer(r, kind) {
+    if (stopped(r) || !['flight', 'hotel'].includes(kind)) return;
+    const category = kind === 'flight' ? 'Flug' : 'Hotel';
+    r.blocked = { category: kind, reason: 'no_matching_offer', message: `Kein passendes Angebot für ${kind === 'flight' ? 'den Flug' : 'das Hotel'} gefunden. Bitte passe deine Werte an.` };
+    r.stopped = true;
+    emit({ type: 'agent.blocked', run_id: r.id, mandate_id: r.mandate.mandate_id, ...r.blocked });
+    say('stop', `${category} nicht gefunden. Der weitere Reiseprozess wurde angehalten.`, { category: kind });
+  }
+
+  async function search(r, kind) {
+    ensureCategory(r, kind);
+    const mandate = r.mandate;
     const trip = mandate.trip;
     if (kind === 'flight') {
       const via = trip.destination.airport ? ` – nächster Flughafen für ${trip.destination.name}, danach Transfer` : '';
       say('search', `Suche Flüge ${trip.origin.iata} → ${trip.destination.iata}${via}, ${trip.travelers} ${trip.travelers === 1 ? 'Person' : 'Personen'} (${duffel.label}) …`);
-      try {
-        const flights = await duffel.searchRoundTrip({ origin: trip.origin.iata, destination: trip.destination.iata, departDate: trip.start_date, returnDate: trip.end_date, adults: trip.travelers, cabin: trip.cabin ?? 'economy', direct: false });
-        return flights.map(f => ({ kind: 'flight', id: f.id, title: `${f.airline.name} ${f.flight_numbers[0]}`, amount: f.amount, currency: f.total_currency, flight: f }));
-      } catch (e) {
-        say('warn', `Duffel antwortet nicht (${e.message}). Ich nehme Demo-Angebote.`);
-        const { createDuffel } = await import('./duffel.js');
-        const demo = createDuffel({ token: '' });
-        const flights = await demo.searchRoundTrip({ origin: trip.origin.iata, destination: trip.destination.iata, departDate: trip.start_date, returnDate: trip.end_date, adults: trip.travelers, cabin: trip.cabin ?? 'economy' });
-        return flights.map(f => ({ kind: 'flight', id: f.id, title: `${f.airline.name} ${f.flight_numbers[0]}`, amount: f.amount, currency: f.total_currency, flight: f }));
-      }
+      const flights = await duffel.searchRoundTrip({ origin: trip.origin.iata, destination: trip.destination.iata, departDate: trip.start_date, returnDate: trip.end_date, adults: trip.travelers, cabin: trip.cabin ?? 'economy', direct: false });
+      ensureCategory(r, kind);
+      return flights.map(f => ({ kind: 'flight', id: f.id, title: `${f.airline.name} ${f.flight_numbers[0]}`, amount: f.amount, currency: f.total_currency, flight: f }));
     }
     const label = { hotel: 'Hotels', transfer: 'Transfers', activity: 'Aktivitäten' }[kind];
     if (kind === 'hotel' && liteapi?.on) {
       // Real sandbox hotels from LiteAPI; the market still supplies the tricky offers (fake site, no refund, unclear terms).
       say('search', `Suche Hotels in ${trip.destination.name} (LiteAPI Sandbox + Testmarkt) …`);
       const tricky = hotelOffers(trip).filter(h => ['fake', 'noncancel', 'unclear'].includes(h.key));
-      try {
-        const real = await liteapi.searchHotels(trip);
-        if (!real.length) say('warn', 'LiteAPI hat keine freien Hotels geliefert. Ich nehme den Testmarkt.');
-        return (real.length ? [...tricky, ...real] : hotelOffers(trip)).sort((a, b) => a.amount - b.amount);
-      } catch (e) {
-        say('warn', `LiteAPI antwortet nicht (${e.message}). Ich nehme den Testmarkt.`);
-        return hotelOffers(trip).sort((a, b) => a.amount - b.amount);
-      }
+      const real = await liteapi.searchHotels(trip);
+      ensureCategory(r, kind);
+      return (real.length ? [...tricky, ...real] : []).sort((a, b) => a.amount - b.amount);
     }
     say('search', `Suche ${label} in ${trip.destination.name} …`);
     const list = kind === 'hotel' ? hotelOffers(trip) : kind === 'transfer' ? transferOffers(trip) : activityOffers(trip);
@@ -139,6 +145,7 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
 
   async function execute(r, offer, auth) {
     if (stopped(r)) return { blocked: true };
+    ensureCategory(r, offer.kind);
     let submitted = false;
     try {
       let candidate = offer, book, label;
@@ -190,141 +197,144 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
 
   // Propose one offer; returns 'approved' | 'declined' | 'pending' plus the decision.
   async function propose(r, offer, extra) {
+    ensureCategory(r, offer.kind);
     const auth = toAuthorization(r.mandate, offer, extra);
     say('propose', `Schlage vor: ${offer.title} · ${offer.currency} ${offer.amount.toFixed(2)}`, { authorization_id: auth.authorization_id, category: offer.kind });
     await wait(500);
+    ensureCategory(r, offer.kind);
     const d = await leash('POST', '/v1/authorizations', auth);
     return { auth, d };
   }
 
-  async function handleCategory(r, kind) {
-    const offers = await search(r.mandate, kind);
-    if (r.stopped) return;
-    await wait(900);
-    say('found', `${offers.length} Angebote gefunden. Ich nehme das günstigste, das passt.`, { category: kind });
-    let tries = 0;
-    const skip = new Set();
-    for (let i = 0; i < offers.length && tries < 7; i++) {
-      if (r.stopped) return;
-      let offer = offers[i];
-      if (skip.has(offer.key)) continue;
-      tries++;
-      let { auth, d } = await propose(r, offer);
-      await wait(700);
-      // Learn from the answer: remove extras and try the same offer again.
-      if (d.decision === 'decline' && d.reason_codes.includes('addon_not_allowed') && offer.removable?.length && !r.stopped) {
-        const clean = { ...offer, items: offer.items.filter(it => !offer.removable.includes(it.item_category)) };
-        clean.amount = clean.items.reduce((s, it) => s + it.unit_price * (it.quantity ?? 1), 0);
-        say('think', 'Die Leine sagt: keine Extras. Ich entferne den Reiseschutz und frage neu.');
-        await wait(800);
-        ({ auth, d } = await propose(r, clean));
-        offer = clean;
-        await wait(700);
-      }
+  // Follow a quote all the way to a booking, decline or explicit customer wait.
+  // A changed quote never counts as a completed category on its own.
+  async function handleDecision(r, offer, auth, d, rest = []) {
+    let requotes = 0;
+    while (!stopped(r)) {
       if (d.decision === 'approve') {
-        const res = await execute(r, offer, auth);
-        if (res.requote && !r.stopped) {
-          const again = await propose(r, res.requote, { related_authorization_id: res.related });
-          if (again.d.decision === 'approve') await execute(r, res.requote, again.auth);
-          else if (again.d.decision === 'step_up') r.waiting.set(again.auth.authorization_id, { offer: res.requote, kind, auth: again.auth, rest: offers.slice(i + 1) });
-        }
-        if (res.booked || res.requote) return;
+        const result = await execute(r, offer, auth);
+        if (result.booked) return 'booked';
+        if (!result.requote || stopped(r)) return 'stopped';
+        if (++requotes > 3) { blockExecution(r, 'Das Angebot ändert sich wiederholt. Bitte prüfe den Anbieter.'); return 'stopped'; }
+        offer = result.requote;
+        ({ auth, d } = await propose(r, offer, { related_authorization_id: result.related }));
         continue;
       }
       if (d.decision === 'step_up') {
-        say('wait', 'Die Leine will deine Zustimmung. Ich mache inzwischen weiter.', { authorization_id: auth.authorization_id });
-        r.waiting.set(auth.authorization_id, { offer, kind, auth, rest: offers.slice(i + 1) });
-        return;
+        say('wait', 'Die Leine will deine Zustimmung. Die weitere Reiseplanung wartet auf deine Antwort.', { authorization_id: auth.authorization_id, category: offer.kind });
+        r.waiting.set(auth.authorization_id, { offer, kind: offer.kind, auth, rest });
+        return 'pending';
       }
-      if (d.reason_codes.includes('mandate_revoked') || d.reason_codes.includes('mandate_paused')) { r.stopped = true; say('stop', 'Die Leine ist gestoppt. Ich höre auf.'); return; }
+      if (d.decision !== 'decline') throw new Error('Die Leine hat keine gültige Entscheidung geliefert.');
+      if (d.reason_codes?.some(code => ['mandate_revoked', 'mandate_paused'].includes(code))) {
+        blockExecution(r, 'Die Leine ist gestoppt. Ich höre auf.');
+        return 'stopped';
+      }
+      (r.rejectedOffers ??= new Set()).add(offer.id);
       say('think', d.agent_hint ? `Abgelehnt. Hinweis der Leine: ${d.agent_hint}` : 'Abgelehnt. Ich suche weiter.');
+      return 'declined';
+    }
+    return 'stopped';
+  }
+
+  async function tryOffers(r, kind, offers) {
+    for (let i = 0; i < offers.length && !stopped(r); i++) {
+      let offer = offers[i];
+      if (r.rejectedOffers?.has(offer.id)) continue;
+      let { auth, d } = await propose(r, offer);
+      await wait(700);
+      if (d.decision === 'decline' && d.reason_codes?.includes('addon_not_allowed') && offer.removable?.length && !stopped(r)) {
+        const items = offer.items.filter(it => !offer.removable.includes(it.item_category));
+        offer = { ...offer, items, amount: items.reduce((sum, item) => sum + item.unit_price * (item.quantity ?? 1), 0) };
+        say('think', 'Die Leine sagt: keine Extras. Ich entferne den Reiseschutz und frage neu.');
+        ({ auth, d } = await propose(r, offer));
+      }
+      const outcome = await handleDecision(r, offer, auth, d, offers.slice(i + 1));
+      if (outcome !== 'declined') return;
       await wait(600);
     }
-    if (!r.stopped) say('warn', `Kein passendes Angebot für ${{ flight: 'den Flug', hotel: 'das Hotel', transfer: 'den Transfer', activity: 'die Aktivität' }[kind]} gefunden.`);
-  }
-
-  // Wait for the customer's answers on step_up items, then book or continue searching.
-  async function settleWaiting(r) {
-    while (r.waiting.size && !r.stopped) {
-      await sleep(1000);
-      for (const [id, w] of [...r.waiting]) {
-        let a;
-        try { a = await leash('GET', `/v1/authorizations/${id}`); } catch { continue; }
-        if (a.status === 'pending') continue;
-        r.waiting.delete(id);
-        if (a.status === 'superseded' && a.resolution?.superseded_by) {
-          const next = await leash('GET', `/v1/authorizations/${a.resolution.superseded_by}`).catch(() => null);
-          if (next) {
-            say('think', `Neues Angebot für «${w.offer.title}»: ${next.authorization.currency} ${next.authorization.amount.toFixed(2)}. Ich warte auf dich.`);
-            if (next.status === 'pending') { r.waiting.set(next.authorization_id, { ...w, auth: next.authorization, offer: { ...w.offer, amount: next.authorization.amount, items: next.authorization.items } }); continue; }
-            if (next.status === 'approved') { await execute(r, { ...w.offer, amount: next.authorization.amount }, next.authorization); continue; }
-          }
-        }
-        if (a.status === 'approved') { say('think', `Du hast «${w.offer.title}» freigegeben.`); await execute(r, w.offer, w.auth); }
-        else {
-          say('think', `«${w.offer.title}» ist abgelehnt (${a.resolution?.text ?? a.status}). Ich suche eine Alternative.`);
-          if (r.stopped) break;
-          for (let i = 0; i < w.rest.length; i++) {
-            if (r.stopped) break;
-            const { auth, d } = await propose(r, w.rest[i]);
-            await wait(700);
-            if (d.decision === 'approve') { await execute(r, w.rest[i], auth); break; }
-            if (d.decision === 'step_up') { r.waiting.set(auth.authorization_id, { offer: w.rest[i], kind: w.kind, auth, rest: w.rest.slice(i + 1) }); break; }
-            if (d.reason_codes.includes('mandate_revoked') || d.reason_codes.includes('mandate_paused')) { r.stopped = true; break; }
-            say('think', d.agent_hint ? `Abgelehnt. Hinweis der Leine: ${d.agent_hint}` : 'Abgelehnt. Ich suche weiter.');
-          }
-        }
-      }
+    if (!stopped(r)) {
+      if (['flight', 'hotel'].includes(kind)) noMatchingOffer(r, kind);
+      else say('warn', `Kein passendes Angebot für ${kind === 'transfer' ? 'den Transfer' : 'die Aktivität'} gefunden.`);
     }
   }
 
-  // AI mode: wait for the customer's answers, book what was approved and tell the model the outcome.
-  async function awaitAnswers(r) {
+  async function handleCategory(r, kind) {
+    const offers = await search(r, kind);
+    if (stopped(r)) return;
+    await wait(900);
+    if (stopped(r)) return;
+    say('found', `${offers.length} Angebote gefunden. Ich nehme das günstigste, das passt.`, { category: kind });
+    await tryOffers(r, kind, offers);
+  }
+
+  async function readAnswer(r, id, waiting) {
+    let answer = await leash('GET', `/v1/authorizations/${id}`);
+    let w = waiting;
+    // A replaced authorization is still the same dependency, not a rejection.
+    if (answer.status === 'superseded' && answer.resolution?.superseded_by) {
+      const nextId = answer.resolution.superseded_by;
+      answer = await leash('GET', `/v1/authorizations/${nextId}`);
+      r.waiting.delete(id);
+      id = nextId;
+      w = { ...w, auth: answer.authorization, offer: { ...w.offer, amount: answer.authorization.amount, currency: answer.authorization.currency, items: answer.authorization.items } };
+      r.waiting.set(id, w);
+    }
+    return { answer, id, w };
+  }
+
+  // Finish the required category before searching a dependent one.
+  async function settleWaiting(r, { alternatives = true } = {}) {
     const lines = [];
-    while (r.waiting.size && !r.stopped) {
-      await sleep(1000);
-      for (const [id, w] of [...r.waiting]) {
-        let a;
-        try { a = await leash('GET', `/v1/authorizations/${id}`); } catch { continue; }
-        if (a.status === 'pending') continue;
+    while (r.waiting.size && !stopped(r)) {
+      await wait(1000);
+      for (const [waitingId, waiting] of [...r.waiting]) {
+        if (stopped(r)) break;
+        const { answer, id, w } = await readAnswer(r, waitingId, waiting);
+        if (stopped(r)) break;
+        if (answer.status === 'pending') continue;
         r.waiting.delete(id);
-        if (a.status === 'superseded' && a.resolution?.superseded_by) {
-          const next = await leash('GET', `/v1/authorizations/${a.resolution.superseded_by}`).catch(() => null);
-          if (next?.status === 'pending') {
-            r.waiting.set(next.authorization_id, { ...w, auth: next.authorization, offer: { ...w.offer, amount: next.authorization.amount, items: next.authorization.items } });
-            lines.push(`${w.offer.title}: the shop changed the price, the customer is asked again.`);
-            continue;
-          }
-        }
-        if (a.status === 'approved') {
-          const res = await execute(r, w.offer, w.auth);
-          lines.push(res.booked ? `Customer APPROVED ${w.offer.title} (${w.kind}); it is booked.` : `Customer approved ${w.offer.title}, but the booking failed. Choose another ${w.kind}.`);
+        if (answer.status === 'approved') {
+          say('think', `Du hast «${w.offer.title}» freigegeben.`);
+          const outcome = await handleDecision(r, w.offer, w.auth, { decision: 'approve' }, w.rest);
+          lines.push(`${w.offer.title}: ${outcome}.`);
+          if (outcome !== 'declined') continue;
+        } else if (!['declined', 'expired', 'voided'].includes(answer.status)) {
+          throw new Error(`Die Freigabe hat einen ungeklärten Status: ${answer.status}.`);
         } else {
-          lines.push(`Customer DECLINED ${w.offer.title} (${w.kind}): ${a.resolution?.text ?? a.status}. Choose another ${w.kind} if still needed.`);
+          (r.rejectedOffers ??= new Set()).add(w.offer.id);
+          say('think', `«${w.offer.title}» ist abgelehnt (${answer.resolution?.text ?? answer.status}). Ich suche eine Alternative.`);
+          lines.push(`Customer DECLINED ${w.offer.title} (${w.kind}): ${answer.resolution?.text ?? answer.status}. Choose another ${w.kind}.`);
         }
+        if (alternatives && !stopped(r)) await tryOffers(r, w.kind, w.rest);
       }
     }
     return `Answers from the customer: ${lines.join(' ') || 'none'}`;
   }
 
+  const awaitAnswers = r => settleWaiting(r, { alternatives: false });
+
   async function runScript(r, kinds) {
     for (const kind of ORDER) {
-      if (r.stopped) break;
-      if (!kinds.includes(kind) || r.booked.has(kind) || [...r.waiting.values()].some(w => w.kind === kind)) continue;
-      await handleCategory(r, kind);
+      if (stopped(r)) break;
+      if (!kinds.includes(kind) || r.booked.has(kind)) continue;
+      if (![...r.waiting.values()].some(w => w.kind === kind)) await handleCategory(r, kind);
+      if (r.waiting.size && !stopped(r)) await settleWaiting(r);
+      if (!stopped(r) && ['flight', 'hotel'].includes(kind) && !r.booked.has(kind)) noMatchingOffer(r, kind);
       await wait(800);
     }
-    await settleWaiting(r);
   }
 
   return {
-    state() { return run ? { running: !run.done && !run.stopped, id: run.id, mandate_id: run.mandate.mandate_id, mode: run.mode, waiting: [...run.waiting.keys()], uncertain: [...(run.uncertain ?? [])], done: !!run.done, stopped: !!run.stopped } : { running: false }; },
+    state() { return run ? { running: !run.done && !run.stopped, id: run.id, mandate_id: run.mandate.mandate_id, mode: run.mode, waiting: [...run.waiting.keys()], uncertain: [...(run.uncertain ?? [])], blocked: run.blocked ?? null, done: !!run.done, stopped: !!run.stopped } : { running: false }; },
     async start(mandateId, { mode = 'script' } = {}) {
       if (run && !run.done && !run.stopped) throw new Error('Der Agent läuft schon.');
+      if (run?.mandate.mandate_id === mandateId && run.uncertain?.size) throw new Error('Ein Buchungsausgang ist ungeklärt. Bitte zuerst den Anbieterstatus prüfen.');
       const mandate = await leash('GET', `/v1/mandates/${mandateId}`);
       if (mandate.status !== 'active') throw new Error('Die Leine ist nicht aktiv.');
       if (!mandate.trip?.destination || !mandate.trip?.start_date) throw new Error('Ziel und Daten fehlen in der Leine.');
-      const r = run = { id: uid('RUN'), mandate, mode, stopped: false, done: false, waiting: new Map(), booked: new Set() };
+      const summary = await leash('GET', `/v1/mandates/${mandateId}/summary`);
+      const r = run = { id: uid('RUN'), mandate, mode, stopped: false, done: false, waiting: new Map(), booked: new Set((summary.bookings ?? []).map(booking => booking.kind).filter(kind => ORDER.includes(kind))) };
       emit({ type: 'agent.started', run_id: r.id, mandate_id: mandateId, mode });
       say('start', `Hallo! Ich ${mode === 'ai' ? 'bin der KI-Agent und ' : ''}plane ${mandate.trip.destination.name} für ${mandate.trip.travelers} ${mandate.trip.travelers === 1 ? 'Person' : 'Personen'}. Bezahlen darf ich nur, was deine Leine erlaubt.`);
       (async () => {
@@ -332,22 +342,29 @@ export function createAgent({ leash, duffel, liteapi = null, emit, pace = () => 
         try {
           if (mode === 'ai') {
             try {
-              await runAiAgent(r, { search, propose, execute, say, awaitAnswers });
+              await runAiAgent(r, { search: (_mandate, kind) => search(r, kind), propose, execute, say, awaitAnswers, noMatchingOffer });
+              // If the model stops early, the deterministic runner completes only missing categories.
+              if (!stopped(r)) await runScript(r, kinds);
             } catch (e) {
               // Predictable fallback: the script agent books whatever is still missing.
-              say('warn', `KI-Agent nicht verfügbar (${e.message}). Der Skript-Agent übernimmt.`);
-              await runScript(r, kinds);
+              if (!stopped(r)) {
+                say('warn', `KI-Agent nicht verfügbar (${e.message}). Der Skript-Agent übernimmt.`);
+                await runScript(r, kinds);
+              }
             }
             if (r.waiting.size) await settleWaiting(r);
           } else {
             await runScript(r, kinds);
           }
-          if (!r.stopped && mode !== 'ai') say('done', 'Fertig. Alles, was gebucht ist, findest du in der Reisekasse.');
+          if (!r.stopped) say('done', 'Fertig. Alles, was gebucht ist, findest du in der Reisekasse.');
         } catch (e) {
-          say('warn', `Agent gestoppt: ${e.message}`);
+          if (!stopped(r)) {
+            r.stopped = true;
+            say('warn', `Agent wegen eines technischen Fehlers gestoppt: ${e.message}. Es wurde kein fehlendes Angebot festgestellt.`);
+          }
         } finally {
           r.done = true;
-          emit({ type: 'agent.finished', run_id: r.id, stopped: r.stopped });
+          emit({ type: 'agent.finished', run_id: r.id, stopped: r.stopped, blocked: r.blocked ?? null });
         }
       })();
       return this.state();

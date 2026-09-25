@@ -65,3 +65,35 @@ mehrere Caps, negative/fehlende Angaben, Personenpreis und Modell-Umdeutung.
 Im Browser Popup, Hotel-Rückfrage, anschliessend aktivierter Bestätigungsknopf
 und Abbruch ohne Textverlust geprüft. Die bestehende Belgrad-Leine unverändert
 gelassen; keine neue Buchung/Zahlung und kein zusätzlicher Jev-Modelltest.
+
+## Reise bei fehlendem Flug/Hotel stoppen und Werte anpassen
+
+Flug und Hotel sind jetzt Voraussetzungen für die nächsten angeforderten
+Kategorien: Solange der Flug nicht gebucht ist, keine Hotelsuche; ohne Hotel
+keine Transfers/Aktivitäten. Reine Hotelaufträge bleiben möglich. Eine offene
+Kundenfreigabe wartet zuerst auf die Antwort; nach Ablehnung werden weitere
+Angebote versucht. Erst wenn die erforderliche Kategorie keine Alternative
+mehr hat, stoppt der Lauf mit `blocked.reason = no_matching_offer`.
+Die gleichen Grenzen gelten für Skript- und KI-Agenten. Technische Anbieter-
+fehler stoppen separat und werden nicht durch synthetische Ersatzangebote kaschiert.
+
+Im Reisebildschirm erscheint „Werte anpassen“. Das öffnet den bisherigen
+Suchtext; die neuen Regeln müssen wieder bestätigt werden. Eine Anpassung
+aktualisiert dieselbe Leine und behält Verlauf, Buchungen und Budgetverbrauch.
+Der Agent lädt tatsächlich gebuchte Kategorien aus der Leash-Zusammenfassung
+und überspringt diese beim Fortsetzen. Nach einer Buchung bleiben Ziel,
+Abflugort, Reisedaten und Reisende fest; unklare Buchungsausgänge erlauben im
+laufenden Prozess keinen erneuten automatischen Versuch.
+
+Validierung: 112/112 Offline-Tests grün; Syntax- und Diffprüfung grün.
+Browserlauf isoliert auf 4332/4333 mit synthetischen Flügen: Fluglimit 0 CHF
+→ 3 Ablehnungen → Stop → „Werte anpassen“ → auf 1 CHF geändert → erneut
+bestätigt → dieselbe Leine v2 → Stop. Keine Hotelsuche, keine Buchung, kein
+Jev-Aufruf, kein verbrauchtes Budget in diesem Test. Hotel-Fehlschlag mit
+bereits gebuchtem Flug, fortgesetzte Hotelsuche ohne zweite Flugbuchung,
+Freigaben/Timeouts, Requotes und KI-Umgehungsversuche sind offline getestet.
+
+Testinstanz beendet. Die Hauptvorschau auf http://127.0.0.1:4330/ läuft mit dem
+neuen Stand. Der Anpassungsknopf wird auch für den bestehenden, abgeschlossenen
+Belgrad-Lauf angezeigt. Dessen historische Test-Transferbuchung und Ausgaben
+wurden erhalten; der alte Verlauf wird nicht nachträglich umgeschrieben.

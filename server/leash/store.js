@@ -114,17 +114,32 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
     updateMandate(id, update, { customerConfirmed = false } = {}) {
       const m = mustMandate(id);
       if (m.status === 'revoked') throw new PolicyError('Die Leine ist gekappt. Lege eine neue an.', 409);
-      const changes = diffMandate(m, update);
+      if (!update || typeof update !== 'object') throw new PolicyError('Änderung fehlt');
+      // Validate the whole proposed mandate before mutating anything. Recovery
+      // changes the existing mandate so previous bookings still consume its budget.
+      const next = structuredClone(validateMandateInput({ ...m, ...update }));
+      const fields = ['instruction', 'trip', 'guidance', 'open_questions'];
+      const metadata = fields.filter(key => Object.hasOwn(update, key) && fingerprint(m[key] ?? null) !== fingerprint(next[key] ?? null));
+      const changes = diffMandate(m, Object.fromEntries(Object.keys(update).filter(key => Object.hasOwn(next, key)).map(key => [key, next[key]])));
+      for (const key of metadata) changes.push({ type: 'changed', rule_id: key, text: ({ instruction: 'Suchwunsch geändert', trip: 'Reisedaten geändert', guidance: 'Präferenzen geändert', open_questions: 'Offene Angaben geändert' })[key] });
       if (!changes.length) return { mandate: m, changes };
+      const hasBookings = Object.values(state.auths).some(a => a.auth.mandate_id === id && a.booking);
+      const itineraryChanged = ['origin', 'destination', 'start_date', 'end_date', 'travelers'].some(key => fingerprint(m.trip?.[key] ?? null) !== fingerprint(next.trip?.[key] ?? null));
+      if (hasBookings && itineraryChanged) {
+        throw new PolicyError('Für diese Reise gibt es bereits eine Buchung. Ort, Reisedaten und Reisende können hier nicht geändert werden; passe nur Budget, Preisgrenzen oder Wünsche an.', 409, { booked_itinerary: true });
+      }
       const looser = changes.filter(c => c.type === 'looser');
+      if (metadata.length && !customerConfirmed) {
+        throw new PolicyError('Geänderte Suchwünsche und Reisedaten brauchen deine ausdrückliche Bestätigung', 409, { requires_confirmation: true, changes });
+      }
       if (looser.length && !customerConfirmed) {
         throw new PolicyError('Lockern braucht deine ausdrückliche Bestätigung', 409, { requires_confirmation: true, changes });
       }
-      if (update.hard_rules) m.hard_rules = validateMandateInput({ instruction: m.instruction, hard_rules: update.hard_rules }).hard_rules;
-      if (update.uncertainty_policy) m.uncertainty_policy = update.uncertainty_policy;
-      if (update.valid_until !== undefined) m.valid_until = update.valid_until;
+      for (const key of ['hard_rules', 'uncertainty_policy', 'valid_until', ...fields]) {
+        if (Object.hasOwn(update, key)) m[key] = next[key];
+      }
       m.version += 1;
-      m.history.push({ version: m.version, at: nowIso(), by: 'customer', text: looser.length ? 'Leine geändert (bestätigt)' : 'Leine gekürzt', changes });
+      m.history.push({ version: m.version, at: nowIso(), by: 'customer', text: looser.length || metadata.length ? 'Leine geändert (bestätigt)' : 'Leine gekürzt', changes });
       emit('mandate.updated', { mandate_id: id, version: m.version, changes, loosened: looser.length > 0 });
       return { mandate: m, changes };
     },
@@ -294,8 +309,10 @@ export function createLeashStore({ file = null, registry = DEFAULT_REGISTRY, fam
       const limit = budgetRule?.value ?? null;
       const counts = {};
       for (const e of entries) counts[e.status] = (counts[e.status] ?? 0) + 1;
+      const bookings = Object.entries(state.auths).filter(([, a]) => a.auth.mandate_id === mandateId && a.booking)
+        .map(([authorization_id, a]) => ({ authorization_id, kind: a.auth.travel?.kind ?? null, booking: structuredClone(a.booking) }));
       return { mandate_id: mandateId, status: m.status, version: m.version, limit, approved, pending,
-        free: limit == null ? null : round2(limit - approved), free_after_pending: limit == null ? null : round2(limit - approved - pending), counts };
+        free: limit == null ? null : round2(limit - approved), free_after_pending: limit == null ? null : round2(limit - approved - pending), counts, bookings };
     },
 
     reset() {

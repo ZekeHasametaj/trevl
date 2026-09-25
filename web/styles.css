@@ -128,6 +128,9 @@ input, textarea { font: inherit; color: inherit; }
 .search-label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 9px; }
 .search-entry { margin-top: 12px; }
 .search-help { margin: 12px 2px; line-height: 1.5; }
+.recovery-card { margin: 14px 0; border: 1px solid var(--ask); background: var(--ask-bg); }
+.recovery-card p { margin: 10px 0; line-height: 1.45; }
+.recovery-card .btn { margin-top: 14px; }
 .composer .tools { position: absolute; left: 12px; right: 12px; bottom: 10px; display: flex; align-items: center; gap: 8px; }
 .mic { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); color: var(--leash); }
 .mic.on { background: var(--brand); color: #fff; animation: pulse-brand 1.2s infinite; }
@@ -313,6 +316,7 @@ details.assume ul { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); f
 .rule-review .trip-card { margin-top: 14px; }
 .rule-review .sticky-cta { bottom: -18px; padding-bottom: 18px; background: var(--bg); border-top: 1px solid var(--line); }
 .review-edit { margin-top: 6px; }
+.review-error { color: var(--no); font-size: 13px; line-height: 1.4; margin: 0 0 10px; }
 .grabber { width: 40px; height: 5px; border-radius: 3px; background: #CFC8BC; margin: 0 auto 12px; }
 @keyframes up { from { transform: translateY(100%); } to { transform: none; } }
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
