@@ -1,0 +1,21 @@
+{
+  "name": "trevl",
+  "version": "1.0.0",
+  "private": true,
+  "description": "trevl – Reiseagent an der Leine (Agent on a Leash, Swiss AI Weeks 2026)",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server/main.js",
+    "start:hotels": "node server/main.js --port=4320 --leash-port=4321 --data-dir=data-hotels --hotels=liteapi",
+    "leash": "node server/leash/main.js",
+    "test": "node --test",
+    "smoke": "node scripts/smoke.mjs",
+    "viseca-replay": "node scripts/viseca-replay.mjs ref/data"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0"
+  }
+}

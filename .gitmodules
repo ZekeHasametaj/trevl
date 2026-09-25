@@ -1,0 +1,3 @@
+[submodule "ref"]
+	path = ref
+	url = https://github.com/Swiss-ai-Weeks/viseca-2026.git

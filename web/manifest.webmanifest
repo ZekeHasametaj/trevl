@@ -1,0 +1,9 @@
+{
+  "name": "trevl – Reiseagent an der Leine",
+  "short_name": "trevl",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F4F1EC",
+  "theme_color": "#F4F1EC",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
