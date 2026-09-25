@@ -179,3 +179,17 @@ Tokio-Lauf geprüft: drei Flugablehnungen, Hotel/Transfer nicht weitergesucht,
 0 CHF bestätigt/gebunden, 100 CHF frei, „Werte anpassen“ am Ende. Screenshot
 auf Lesbarkeit geprüft, Suchtext erhalten. Keine neue Buchung/Zahlung ausgelöst.
 Frontend statisch neu geladen; laufenden Server und Backend-Daten beibehalten.
+
+## Schwebender Anhalten-Knopf
+
+Anhalten sitzt während des Laufs unten rechts über der Navigation, ausserhalb
+des scrollenden Inhalts. Auch beim Ansichtswechsel bleibt der Knopf erreichbar.
+Hover und Tastaturfokus sind sichtbar; auf kleinen Bildschirmen ist er fixiert.
+Während der Stopp-Anfrage und noch laufender Abschlussarbeit erscheint gesperrt
+„Wird angehalten …“. Fehler werden angezeigt; der Knopf ist danach erneut nutzbar.
+Der vorhandene Backend-Stopp bleibt unverändert. Keine neue Buchung ausgelöst.
+
+Validierung: JS-Syntax und Diff geprüft. Isolierte UI-Fixture mit den tatsächlichen
+Frontend-Dateien (keine Provideraufrufe): Position beim Scrollen unverändert,
+Screenshot geprüft, Klick sendet Stopp, zeigt gesperrten Zwischenstand und blendet
+den Knopf nach Abschluss aus. Temporären Testserver und Testtab geschlossen.

@@ -83,7 +83,7 @@ function semanticEvidence(check) {
 const S = {
   config: {}, view: 'welcome', text: '', answers: {}, draft: null, unc: null, compiling: false,
   mandate: null, summary: null, auths: [], authMap: {}, agent: {}, feed: [], wire: [], seen: new Set(), attacks: [],
-  pushId: null, sheet: null, busy: false, compileRequest: 0, adjustment: null, reviewError: null,
+  pushId: null, sheet: null, busy: false, stoppingAgent: false, compileRequest: 0, adjustment: null, reviewError: null,
 };
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -289,7 +289,7 @@ function agentBar() {
   else if (a.uncertain?.length) label = 'Gestoppt – Buchungsausgang klären';
   else if (currentBlock()) label = `Gestoppt – kein ${currentBlock().category === 'flight' ? 'passender Flug' : 'passendes Hotel'}`;
   else if (a.stopped) { label = 'Angehalten'; btn = `<button class="btn btn-ghost btn-sm" data-action="agent-start">${I.play(14)} Erneut suchen</button>`; }
-  else if (a.running) { label = waiting ? `Wartet auf dich (${waiting})` : 'Arbeitet …'; btn = `<button class="btn btn-ghost btn-sm" data-action="agent-stop">${I.pause(14)} Anhalten</button>`; }
+  else if (a.running) label = waiting ? `Wartet auf dich (${waiting})` : 'Arbeitet …';
   else { label = a.done ? 'Fertig' : 'Bereit'; btn = `<button class="btn btn-primary btn-sm" data-action="agent-start">${I.play(14)} ${a.done ? 'Nochmals suchen' : 'Agent starten'}</button>`; }
   return `<div class="agent-bar"><div class="who"><span class="avatar">${I.spark(15)}</span><div>Reiseagent<div class="small">${esc(label)}</div></div></div><span class="spacer"></span>${btn}</div>`;
 }
@@ -648,7 +648,21 @@ const REQS = [
   ['Händlertext nicht vertrauenswürdig', 'Injection erkannt, Regeln unverändert'],
   ['Regelkern + Inhaltsprüfung', 'Feste Regeln + echte Jev-Prüfung (Timeout 3 s). Die Leine entscheidet; gemessene Prüfzeiten stehen am Ergebnis.'],
 ];
+function renderAgentStop() {
+  const button = $('#agentStop');
+  const settling = S.agent.stopped && !S.agent.done;
+  button.hidden = !(S.agent.running || S.stoppingAgent || settling);
+  button.disabled = S.stoppingAgent || settling;
+  const label = button.disabled ? 'Wird angehalten …' : 'Anhalten';
+  // Keep the focused button itself mounted across live updates.
+  if (button.dataset.label !== label) {
+    button.innerHTML = `${I.pause(18)} <span>${label}</span>`;
+    button.dataset.label = label;
+  }
+  $('#screen').classList.toggle('has-agent-stop', !button.hidden);
+}
 function renderSides() {
+  renderAgentStop();
   const left = $('#regie'), right = $('#wire');
   if (getComputedStyle(left).display === 'none') return;
   const c = S.config;
@@ -745,7 +759,15 @@ const A = {
     finally { S.busy = false; render(); }
   },
   'agent-start': async () => { try { await api('POST', '/api/agent/start', { mandate_id: S.mandate.mandate_id }); softRefresh(); } catch (e) { toast(e.message); } },
-  'agent-stop': async () => { await api('POST', '/api/agent/stop'); softRefresh(); },
+  'agent-stop': async () => {
+    if (S.stoppingAgent || S.agent.stopped) return;
+    S.stoppingAgent = true; renderAgentStop();
+    try {
+      S.agent = await api('POST', '/api/agent/stop');
+      softRefresh();
+    } catch (e) { toast(`Anhalten fehlgeschlagen: ${e.message}`); }
+    finally { S.stoppingAgent = false; renderAgentStop(); }
+  },
   why: (el) => whySheet(el.dataset.id),
   approve: async (el) => {
     await faceId();
